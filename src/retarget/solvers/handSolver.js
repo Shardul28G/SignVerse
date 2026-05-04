@@ -33,7 +33,13 @@ export function solveHand(handLm, side) {
     }
     // dirs[0] is wrist->CMC/MCP. dirs[1] is MCP->PIP. dirs[2] is PIP->DIP. dirs[3] is DIP->TIP.
     // VRM has 3 bones: Proximal, Intermediate, Distal.
-    fingerDirs[name] = dirs.slice(1);
+    if (name === 'thumb') {
+      // Drive the thumb's base bone using Wrist -> MCP to capture more of its sweeping motion
+      const wristToMcp = lm[2].clone().sub(wrist).normalize();
+      fingerDirs[name] = [wristToMcp, dirs[2], dirs[3]];
+    } else {
+      fingerDirs[name] = dirs.slice(1);
+    }
   }
 
   return { palmFwd, palmUp, fingerDirs };
