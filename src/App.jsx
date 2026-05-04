@@ -128,21 +128,68 @@ function Lights() {
   );
 }
 
+const JSON_URLS = ["./You.json", "./fever2.json"];
+
+function lerpFrame(frameA, frameB, t) {
+  const out = {};
+  function lerpArr(arrA, arrB) {
+    if (!arrA || !arrB) return arrA || arrB;
+    if (arrA.length !== arrB.length) return arrA;
+    return arrA.map((pt, i) => {
+      const pb = arrB[i];
+      if (!pt || !pb) return pt || pb;
+      return {
+        x: pt.x + (pb.x - pt.x) * t,
+        y: pt.y + (pb.y - pt.y) * t,
+        z: pt.z + (pb.z - pt.z) * t,
+        visibility: pt.visibility !== undefined && pb.visibility !== undefined 
+            ? pt.visibility + (pb.visibility - pt.visibility) * t 
+            : pt.visibility
+      };
+    });
+  }
+  
+  out.pose3D = lerpArr(frameA.pose3D, frameB.pose3D);
+  out.leftHandWorld = lerpArr(frameA.leftHandWorld, frameB.leftHandWorld);
+  out.rightHandWorld = lerpArr(frameA.rightHandWorld, frameB.rightHandWorld);
+  out.faceLandmarks = lerpArr(frameA.faceLandmarks, frameB.faceLandmarks);
+  return out;
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const [frames, setFrames] = useState([]);
   const [error, setError]   = useState(null);
 
   useEffect(() => {
-    fetch(JSON_URL)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status} loading ${JSON_URL}`);
-        return r.json();
-      })
-      .then((data) => {
-        const arr = Array.isArray(data) ? data : data.frames ?? [];
-        arr.sort((a, b) => (a.frameIndex ?? 0) - (b.frameIndex ?? 0));
-        setFrames(arr);
+    Promise.all(
+      JSON_URLS.map(url => 
+        fetch(url).then(r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status} loading ${url}`);
+          return r.json();
+        })
+      )
+    )
+      .then((results) => {
+        let combinedFrames = [];
+        for (let i = 0; i < results.length; i++) {
+          const data = results[i];
+          const arr = Array.isArray(data) ? data : data.frames ?? [];
+          arr.sort((a, b) => (a.frameIndex ?? 0) - (b.frameIndex ?? 0));
+          
+          // Smooth transition between clips (e.g., 15 frames = ~0.6 seconds at 25fps)
+          if (i > 0 && combinedFrames.length > 0 && arr.length > 0) {
+            const lastFrame = combinedFrames[combinedFrames.length - 1];
+            const firstFrame = arr[0];
+            const TRANSITION_FRAMES = 15;
+            for (let step = 1; step <= TRANSITION_FRAMES; step++) {
+               combinedFrames.push(lerpFrame(lastFrame, firstFrame, step / (TRANSITION_FRAMES + 1)));
+            }
+          }
+          
+          combinedFrames = combinedFrames.concat(arr);
+        }
+        setFrames(combinedFrames);
       })
       .catch((e) => setError(e.message));
   }, []);
