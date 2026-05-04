@@ -15,10 +15,11 @@ import { solveArm }   from './solvers/armSolver.js';
 import { solveHand }  from './solvers/handSolver.js';
 import {
   buildRestState, applyDirToBone, setWorldRotation,
-  applyLocalDelta, applyFingersWorld, alignHandBasis
+  applyLocalDelta, applyFingersWorld, alignHandBasis, resetHandToRest
 } from './retargeter.js';
 import { makeFilterArray, filterLandmarks } from './filter.js';
 import { quatFromUnitVectors } from './coords.js';
+import { solveFace } from './solvers/faceSolver.js';
 
 export class RetargetPipeline {
   constructor(vrm, opts = {}) {
@@ -39,7 +40,13 @@ export class RetargetPipeline {
 
     // ── Spine / chest / head ────────────────────────────────────────────────
     const spine = solveSpine(pose);
-    setWorldRotation(this.vrm, 'hips',  spine.hipQuat,   this.alpha);
+    
+    // Stabilize hips: keep only Y-axis rotation (yaw) to prevent tilting/floating
+    const hipEuler = new THREE.Euler().setFromQuaternion(spine.hipQuat, 'YXZ');
+    hipEuler.x = 0; // Remove pitch
+    hipEuler.z = 0; // Remove roll
+    const stableHipQuat = new THREE.Quaternion().setFromEuler(hipEuler);
+    setWorldRotation(this.vrm, 'hips', stableHipQuat, this.alpha);
 
     // chest (or spine fallback)
     if (this.restState.chest)      setWorldRotation(this.vrm, 'chest', spine.chestQuat, this.alpha);
@@ -82,6 +89,8 @@ export class RetargetPipeline {
           alignHandBasis(this.vrm, 'rightHand', sol.palmFwd, sol.palmUp, this.restState, this.alpha);
           applyFingersWorld(this.vrm, 'right', sol.fingerDirs, this.restState, this.fingerAlpha);
         }
+      } else {
+        resetHandToRest(this.restState, 'right', this.fingerAlpha);
       }
       if (subjectLeftHand?.length >= 21) {
         const filtered = filterLandmarks(subjectLeftHand, this.lhFilters, t);
@@ -90,6 +99,29 @@ export class RetargetPipeline {
           alignHandBasis(this.vrm, 'leftHand', sol.palmFwd, sol.palmUp, this.restState, this.alpha);
           applyFingersWorld(this.vrm, 'left', sol.fingerDirs, this.restState, this.fingerAlpha);
         }
+      } else {
+        resetHandToRest(this.restState, 'left', this.fingerAlpha);
+      }
+    }
+
+    // ── Face Expressions ────────────────────────────────────────────────────
+    if (frame.faceLandmarks) {
+      const faceData = solveFace(frame.faceLandmarks);
+      const em = this.vrm.expressionManager;
+      if (em && faceData) {
+        // Set VRM 1.0 and VRM 0.0 standard expression names to be safe
+        em.setValue('aa', faceData.mouthA); em.setValue('a', faceData.mouthA);
+        
+        // In mirror mode, we swap the blinks so that the subject winking their right eye 
+        // (which appears on the left side of the screen) makes the avatar's left eye wink
+        em.setValue('blinkLeft', faceData.blinkRight);
+        em.setValue('blinkRight', faceData.blinkLeft);
+        
+        // Zero out others for now
+        em.setValue('ee', 0); em.setValue('e', 0);
+        em.setValue('ih', 0); em.setValue('i', 0);
+        em.setValue('oh', 0); em.setValue('o', 0);
+        em.setValue('ou', 0); em.setValue('u', 0);
       }
     }
 

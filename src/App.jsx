@@ -11,14 +11,13 @@ import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 
 import { RetargetPipeline } from "./retarget/pipeline.js";
-import { StickFigure } from "./retarget/stickFigure.js";
 
 const BG_COLOR = "#e8ecf2";       // light background
 
 const FPS = 25;
 const FRAME_TIME = 1 / FPS;
 const VRM_URL = "./anim.vrm";
-const JSON_URL = "./You.json";
+const JSON_URL = "./floor.json";
 
 // ─── VRM loader ──────────────────────────────────────────────────────────────
 function useVRM(url) {
@@ -64,12 +63,14 @@ function FitCameraToObject({ object, padding = 1.25, extraWidth = 1.0 }) {
     const distH = (effectiveWidth / 2) / (Math.tan(fov / 2) * aspect);
     const dist = Math.max(distV, distH) * padding;
 
-    // Shift camera slightly to the right so both avatar and stick figure are framed.
-    const shiftX = sizeVec.x * (extraWidth - 1) * 0.5;
-    camera.position.set(center.x + shiftX, center.y, center.z + dist);
-    camera.near = Math.max(0.01, dist / 100);
-    camera.far  = dist * 100;
-    camera.lookAt(center.x + shiftX, center.y, center.z);
+    // Center the camera exactly on the avatar to allow looking eye-to-eye
+    const upperY = center.y + sizeVec.y * 0.25;
+    const zoomDist = dist * 0.8;
+    
+    camera.position.set(center.x, upperY, center.z + zoomDist);
+    camera.near = Math.max(0.01, zoomDist / 100);
+    camera.far  = zoomDist * 100;
+    camera.lookAt(center.x, upperY, center.z);
     camera.updateProjectionMatrix();
   }, [object, camera, size, padding, extraWidth]);
   return null;
@@ -79,9 +80,7 @@ function FitCameraToObject({ object, padding = 1.25, extraWidth = 1.0 }) {
 function VRMScene({ frames }) {
   const vrm = useVRM(VRM_URL);
   const groupRef = useRef();
-  const stickGroupRef = useRef();
   const pipelineRef = useRef(null);
-  const stickRef = useRef(null);
   const playback = useRef({ accumulator: 0, idx: 0 });
 
   useEffect(() => {
@@ -90,26 +89,8 @@ function VRMScene({ frames }) {
     groupRef.current.updateMatrixWorld(true);
     pipelineRef.current = new RetargetPipeline(vrm, { alpha: 0.45, fingerAlpha: 0.5 });
 
-    // Attach the stick figure — beside the avatar, anchored at avatar's hip height.
-    if (stickGroupRef.current) {
-      const box = new THREE.Box3().setFromObject(vrm.scene);
-      const center = box.getCenter(new THREE.Vector3());
-      const sizeVec = box.getSize(new THREE.Vector3());
-      const sf = new StickFigure({
-        scale: 1.0,
-        offset: new THREE.Vector3(center.x + sizeVec.x * 1.1, center.y, center.z),
-      });
-      stickGroupRef.current.add(sf.root);
-      stickRef.current = sf;
-    }
-
     return () => {
       groupRef.current?.remove(vrm.scene);
-      if (stickRef.current) {
-        stickGroupRef.current?.remove(stickRef.current.root);
-        stickRef.current.dispose();
-        stickRef.current = null;
-      }
       pipelineRef.current = null;
     };
   }, [vrm]);
@@ -125,14 +106,12 @@ function VRMScene({ frames }) {
     const t = performance.now() / 1000;
     const frame = frames[pb.idx];
     pipelineRef.current.step(frame, t);
-    stickRef.current?.update(frame);
   });
 
   return (
     <>
       <group ref={groupRef} />
-      <group ref={stickGroupRef} />
-      {vrm && <FitCameraToObject object={vrm.scene} padding={1.6} extraWidth={1.6} />}
+      {vrm && <FitCameraToObject object={vrm.scene} padding={1.6} />}
     </>
   );
 }

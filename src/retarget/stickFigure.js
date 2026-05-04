@@ -50,6 +50,7 @@ export class StickFigure {
     this.colorPose = opts.colorPose ?? 0x1a4a8a;   // dark blue (visible on light bg)
     this.colorLeft = opts.colorLeft ?? 0xc62828;   // red    (subject's right hand in MP)
     this.colorRight = opts.colorRight ?? 0x2e7d32; // green  (subject's left hand in MP)
+    this.colorFace = opts.colorFace ?? 0xff9800;   // orange
     this.dotColor = opts.dotColor ?? 0x222222;
 
     this.root = new THREE.Group();
@@ -61,6 +62,7 @@ export class StickFigure {
     this.poseDots   = this._makeDots(33, this.dotColor, 0.012);
     this.lhDots     = this._makeDots(21, this.colorLeft,  0.008);
     this.rhDots     = this._makeDots(21, this.colorRight, 0.008);
+    this.faceDots   = this._makeDots(468, this.colorFace, 0.005);
   }
 
   _makeLines(count, color) {
@@ -143,6 +145,10 @@ export class StickFigure {
     this._setLineSegments(this.rhLines, frame.rightHandWorld, HAND_BONES, rhOffset);
     this._setDots(this.lhDots, frame.leftHandWorld, lhOffset);
     this._setDots(this.rhDots, frame.rightHandWorld, rhOffset);
+    
+    // Draw face landmarks. We apply a slight upward offset so it floats above the hands
+    // since the landmarks are usually normalized coordinates (0 to 1).
+    this._setDots(this.faceDots, frame.faceLandmarks, new THREE.Vector3(-0.5, 1.5, 0));
   }
 
   dispose() {

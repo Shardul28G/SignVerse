@@ -22,14 +22,14 @@ export const BONE_CHILDREN = {
 
 const FINGER_BONES = {
   left: {
-    thumb:  ['leftThumbProximal',  'leftThumbIntermediate',  'leftThumbDistal'],
+    thumb:  ['leftThumbMetacarpal',  'leftThumbProximal',  'leftThumbDistal'],
     index:  ['leftIndexProximal',  'leftIndexIntermediate',  'leftIndexDistal'],
     middle: ['leftMiddleProximal', 'leftMiddleIntermediate', 'leftMiddleDistal'],
     ring:   ['leftRingProximal',   'leftRingIntermediate',   'leftRingDistal'],
     pinky:  ['leftLittleProximal', 'leftLittleIntermediate', 'leftLittleDistal'],
   },
   right: {
-    thumb:  ['rightThumbProximal',  'rightThumbIntermediate',  'rightThumbDistal'],
+    thumb:  ['rightThumbMetacarpal',  'rightThumbProximal',  'rightThumbDistal'],
     index:  ['rightIndexProximal',  'rightIndexIntermediate',  'rightIndexDistal'],
     middle: ['rightMiddleProximal', 'rightMiddleIntermediate', 'rightMiddleDistal'],
     ring:   ['rightRingProximal',   'rightRingIntermediate',   'rightRingDistal'],
@@ -228,5 +228,22 @@ export function applyFingersWorld(vrm, side, fingerDirs, restState, alpha = 1) {
 export function resetToRest(restState) {
   for (const s of Object.values(restState)) {
     if (s?.node && s.restLocalQuat) s.node.quaternion.copy(s.restLocalQuat);
+  }
+}
+
+export function resetHandToRest(restState, side, alpha = 0.2) {
+  const bones = [
+    `${side}Hand`,
+    `${side}ThumbMetacarpal`, `${side}ThumbProximal`, `${side}ThumbDistal`,
+    `${side}IndexProximal`, `${side}IndexIntermediate`, `${side}IndexDistal`,
+    `${side}MiddleProximal`, `${side}MiddleIntermediate`, `${side}MiddleDistal`,
+    `${side}RingProximal`, `${side}RingIntermediate`, `${side}RingDistal`,
+    `${side}LittleProximal`, `${side}LittleIntermediate`, `${side}LittleDistal`
+  ];
+  for (const name of bones) {
+    const s = restState[name];
+    if (s?.node && s.restLocalQuat) {
+      s.node.quaternion.slerp(s.restLocalQuat, alpha);
+    }
   }
 }
