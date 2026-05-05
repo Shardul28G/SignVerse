@@ -1,5 +1,5 @@
 /**
- * Avatar viewer driven by the custom retargeting pipeline.
+ * ISL Helper — split-layout redesign.
  *
  * Flow:
  *   1. User enters text / picks an image / records audio.
@@ -15,30 +15,17 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
-
 import { RetargetPipeline } from "./retarget/pipeline.js";
+import "./App.css";
 
-const BG_COLOR = "#e8ecf2";
 const FPS = 25;
 const FRAME_TIME = 1 / FPS;
 const VRM_URL = "./anim.vrm";
-
 const LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions";
 
-// Words available in /public as <Name>.json. Multi-word entries (longer first)
-// are tried before single words so phrases like "What Is Your Name" prefer the
-// dedicated clip over individual signs.
 const DICTIONARY = [
-  "Caution",
-  "Fever",
-  "Floor",
-  "Name",
-  "Please",
-  "Wet",
-  "What",
-  "You",
-  "Your",
-  "hospital",
+  "Caution", "Fever", "Floor", "Name", "Please",
+  "Wet", "What", "You", "Your", "hospital",
 ];
 
 const SYSTEM_PROMPT =
@@ -48,7 +35,108 @@ const SYSTEM_PROMPT =
   "with no articles, no auxiliary verbs, and no punctuation. " +
   "Reply with ONLY the gloss line — no quotes, no explanation, no extra text.";
 
-// ─── VRM loader ──────────────────────────────────────────────────────────────
+// ─── SVG icon helpers ─────────────────────────────────────────────────────────
+const Ico = ({ d, size = 14, fill = "none", sw = 2 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}
+    stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
+    {Array.isArray(d) ? d.map((p, i) => <path key={i} d={p} />) : <path d={d} />}
+  </svg>
+);
+
+const TextIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 7V4h16v3" /><path d="M9 20h6" /><path d="M12 4v16" />
+  </svg>
+);
+const MicIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+    <path d="M12 19v3" />
+  </svg>
+);
+const ImageIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="9" cy="9" r="2" />
+    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+  </svg>
+);
+const TrashIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+  </svg>
+);
+const InfoIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" />
+    <path d="M12 16v-4" /><path d="M12 8h.01" />
+  </svg>
+);
+const PlayIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+    <path d="M8 5v14l11-7z" />
+  </svg>
+);
+const PauseIcon = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+    <path d="M6 4h4v16H6zM14 4h4v16h-4z" />
+  </svg>
+);
+const PrevIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M6 6h2v12H6zM9.5 12l8.5 6V6z" />
+  </svg>
+);
+const NextIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z" />
+  </svg>
+);
+const ReplayIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" />
+  </svg>
+);
+const BookIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+  </svg>
+);
+const UploadIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="17 8 12 3 7 8" />
+    <line x1="12" y1="3" x2="12" y2="15" />
+  </svg>
+);
+const SettingsIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+  </svg>
+);
+const CaptionsIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="5" width="20" height="14" rx="2" />
+    <path d="M7 15h2" /><path d="M11 15h6" /><path d="M7 11h10" />
+  </svg>
+);
+const FullscreenIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 7V3h4" /><path d="M21 7V3h-4" />
+    <path d="M3 17v4h4" /><path d="M21 17v4h-4" />
+  </svg>
+);
+const ChevDownIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
+// ─── VRM loader ───────────────────────────────────────────────────────────────
 function useVRM(url) {
   const [vrm, setVrm] = useState(null);
   useEffect(() => {
@@ -70,7 +158,7 @@ function useVRM(url) {
   return vrm;
 }
 
-// ─── Auto-fit camera around the avatar bounding box ──────────────────────────
+// ─── Auto-fit camera ──────────────────────────────────────────────────────────
 function FitCameraToObject({ object, padding = 1.25, extraWidth = 1.0 }) {
   const { camera, size } = useThree();
   useEffect(() => {
@@ -79,28 +167,25 @@ function FitCameraToObject({ object, padding = 1.25, extraWidth = 1.0 }) {
     if (box.isEmpty()) return;
     const center = box.getCenter(new THREE.Vector3());
     const sizeVec = box.getSize(new THREE.Vector3());
-
     const effectiveWidth = sizeVec.x * extraWidth;
     const fov = THREE.MathUtils.degToRad(camera.fov);
     const aspect = size.width / size.height;
     const distV = (sizeVec.y / 2) / Math.tan(fov / 2);
     const distH = (effectiveWidth / 2) / (Math.tan(fov / 2) * aspect);
     const dist = Math.max(distV, distH) * padding;
-
     const upperY = center.y + sizeVec.y * 0.25;
     const zoomDist = dist * 0.8;
-
     camera.position.set(center.x, upperY, center.z + zoomDist);
     camera.near = Math.max(0.01, zoomDist / 100);
-    camera.far  = zoomDist * 100;
+    camera.far = zoomDist * 100;
     camera.lookAt(center.x, upperY, center.z);
     camera.updateProjectionMatrix();
   }, [object, camera, size, padding, extraWidth]);
   return null;
 }
 
-// ─── Animated VRM scene ──────────────────────────────────────────────────────
-function VRMScene({ frames, wordRanges, onWordChange }) {
+// ─── VRM scene (animated, with play/speed/progress/jump control) ──────────────
+function VRMScene({ frames, wordRanges, onWordChange, playing, speed, onProgress, controlRef }) {
   const vrm = useVRM(VRM_URL);
   const groupRef = useRef();
   const pipelineRef = useRef(null);
@@ -118,23 +203,38 @@ function VRMScene({ frames, wordRanges, onWordChange }) {
     };
   }, [vrm]);
 
-  // Reset playback to frame 0 whenever a new clip sequence is loaded.
   useEffect(() => {
     playback.current.idx = 0;
     playback.current.accumulator = 0;
     lastWordIdx.current = -1;
   }, [frames]);
 
+  useEffect(() => {
+    if (!controlRef) return;
+    controlRef.current = {
+      jumpToWord: (wordIdx) => {
+        if (wordRanges && wordRanges[wordIdx]) {
+          playback.current.idx = wordRanges[wordIdx].start;
+          playback.current.accumulator = 0;
+        }
+      },
+    };
+  }, [wordRanges, controlRef]);
+
   useFrame((_, delta) => {
     if (!vrm || !frames.length || !pipelineRef.current) return;
     const pb = playback.current;
-    pb.accumulator += delta;
-    while (pb.accumulator >= FRAME_TIME) {
-      pb.accumulator -= FRAME_TIME;
-      pb.idx = (pb.idx + 1) % frames.length;
+    if (playing) {
+      pb.accumulator += delta * (speed ?? 1.0);
+      while (pb.accumulator >= FRAME_TIME) {
+        pb.accumulator -= FRAME_TIME;
+        pb.idx = (pb.idx + 1) % frames.length;
+      }
     }
     const t = performance.now() / 1000;
     pipelineRef.current.step(frames[pb.idx], t);
+
+    if (onProgress) onProgress(frames.length > 0 ? pb.idx / frames.length : 0);
 
     if (wordRanges && wordRanges.length && onWordChange) {
       let wIdx = -1;
@@ -159,19 +259,19 @@ function VRMScene({ frames, wordRanges, onWordChange }) {
   );
 }
 
-// ─── Lighting ────────────────────────────────────────────────────────────────
+// ─── Lights ───────────────────────────────────────────────────────────────────
 function Lights() {
   return (
     <>
       <ambientLight intensity={1.0} />
-      <hemisphereLight args={["#ffffff", "#c8d0dc", 0.6]} />
+      <hemisphereLight args={["#ffffff", "#e8dece", 0.6]} />
       <directionalLight position={[3, 6, 4]} intensity={1.0} />
       <directionalLight position={[-3, 4, -4]} intensity={0.35} color="#aaccff" />
     </>
   );
 }
 
-// ─── Frame interpolation for clip transitions ────────────────────────────────
+// ─── Frame lerp (clip transitions) ───────────────────────────────────────────
 function lerpFrame(frameA, frameB, t) {
   const lerpArr = (arrA, arrB) => {
     if (!arrA || !arrB) return arrA || arrB;
@@ -183,9 +283,10 @@ function lerpFrame(frameA, frameB, t) {
         x: pt.x + (pb.x - pt.x) * t,
         y: pt.y + (pb.y - pt.y) * t,
         z: pt.z + (pb.z - pt.z) * t,
-        visibility: pt.visibility !== undefined && pb.visibility !== undefined
-          ? pt.visibility + (pb.visibility - pt.visibility) * t
-          : pt.visibility,
+        visibility:
+          pt.visibility !== undefined && pb.visibility !== undefined
+            ? pt.visibility + (pb.visibility - pt.visibility) * t
+            : pt.visibility,
       };
     });
   };
@@ -197,9 +298,7 @@ function lerpFrame(frameA, frameB, t) {
   };
 }
 
-// ─── Gloss → list of available dictionary clip names ─────────────────────────
-// Greedy longest-match: scan tokens left-to-right and try the longest available
-// phrase first (e.g. "What Is Your Name" → "What_Is_Your_Name").
+// ─── Gloss → matched / skipped clip names ────────────────────────────────────
 function glossToClipNames(gloss) {
   const tokens = gloss
     .replace(/[^\w\s]/g, " ")
@@ -238,10 +337,7 @@ function glossToClipNames(gloss) {
   return { matched, skipped };
 }
 
-// ─── Load + concat landmark JSONs with smooth transitions ────────────────────
-// Returns { frames, wordRanges } where wordRanges[i] = { name, start, end }
-// gives the half-open frame range belonging to clipNames[i] in the combined
-// timeline (transition frames are attributed to the *next* word).
+// ─── Load + concatenate landmark JSONs ───────────────────────────────────────
 async function loadClipFrames(clipNames) {
   const TRANSITION_FRAMES = 15;
   const datas = await Promise.all(
@@ -252,7 +348,6 @@ async function loadClipFrames(clipNames) {
       }),
     ),
   );
-
   let combined = [];
   const wordRanges = [];
   for (let i = 0; i < datas.length; i++) {
@@ -273,7 +368,7 @@ async function loadClipFrames(clipNames) {
   return { frames: combined, wordRanges };
 }
 
-// ─── llama.cpp call: text-only or multimodal (image) ─────────────────────────
+// ─── LLM call ─────────────────────────────────────────────────────────────────
 async function fetchGloss({ text, imageDataUrl }) {
   const userContent = imageDataUrl
     ? [
@@ -305,12 +400,11 @@ async function fetchGloss({ text, imageDataUrl }) {
     return { raw: "", cleaned: "", debug: respText, httpError: `HTTP ${resp.status}` };
   }
   const raw = data?.choices?.[0]?.message?.content ?? "";
-  // Strip surrounding quotes/whitespace and any trailing punctuation.
   const cleaned = raw.trim().replace(/^["'`]+|["'`]+$/g, "").replace(/[.!?]+$/, "").trim();
   return { raw, cleaned, debug: respText, httpError: null };
 }
 
-// ─── Browser speech recognition (no server roundtrip) ────────────────────────
+// ─── Browser speech recognition ───────────────────────────────────────────────
 function getSpeechRecognition() {
   const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!Ctor) return null;
@@ -330,12 +424,63 @@ function fileToDataURL(file) {
   });
 }
 
-// ─── Input panel ─────────────────────────────────────────────────────────────
-function InputPanel({ onPlay, status, gloss, modelRaw, modelDebug, hasSubmitted, matched, skipped, activeWordIdx, error }) {
+// ─── Topbar ───────────────────────────────────────────────────────────────────
+function Topbar({ status }) {
+  const modelOnline = status !== "error";
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <div className="brand-mark">i</div>
+        <div>
+          <div className="brand-name">ISL Helper</div>
+          <div className="brand-sub">Indian Sign Language assistant</div>
+        </div>
+      </div>
+      <div className="topbar-actions">
+        <button className="pill-btn">
+          <span
+            className="dot"
+            style={{ background: modelOnline ? "var(--ok)" : "var(--warn)" }}
+          />
+          {modelOnline ? "Model online" : "Model offline"}
+        </button>
+        <button className="pill-btn">EN-IN → ISL</button>
+        <button className="pill-btn" aria-label="Settings">
+          <SettingsIcon />
+          Settings
+        </button>
+      </div>
+    </header>
+  );
+}
+
+// ─── Input panel (left column) ────────────────────────────────────────────────
+function InputPanel({
+  onPlay, onRetry, onDictPreview,
+  status, matched, skipped, activeWordIdx,
+  error, modelDebug, hasSubmitted,
+}) {
+  const [mode, setMode] = useState("text");
   const [text, setText] = useState("");
   const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
   const [recording, setRecording] = useState(false);
+  const [dictOpen, setDictOpen] = useState(false);
   const recRef = useRef(null);
+
+  const busy = status === "loading";
+
+  const glossCardState =
+    status === "loading" ? "loading" : error ? "error" : "ready";
+
+  const glossStatusText = (() => {
+    if (status === "loading") return "Avatar signing PLEASE WAIT…";
+    if (error) return "Translation failed";
+    if (activeWordIdx >= 0 && matched.length > 0)
+      return `Now signing · word ${activeWordIdx + 1} of ${matched.length}`;
+    if (matched.length > 0) return "Signing…";
+    return "Ready";
+  })();
 
   const submit = async () => {
     if (!text.trim() && !imageFile) return;
@@ -347,7 +492,7 @@ function InputPanel({ onPlay, status, gloss, modelRaw, modelDebug, hasSubmitted,
   const startRecording = () => {
     const rec = getSpeechRecognition();
     if (!rec) {
-      alert("SpeechRecognition is not supported in this browser. Try Chrome.");
+      alert("SpeechRecognition not supported in this browser. Try Chrome.");
       return;
     }
     recRef.current = rec;
@@ -355,6 +500,7 @@ function InputPanel({ onPlay, status, gloss, modelRaw, modelDebug, hasSubmitted,
     rec.onresult = (e) => {
       const transcript = e.results[0][0].transcript;
       setText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+      setMode("text");
     };
     rec.onend = () => setRecording(false);
     rec.onerror = () => setRecording(false);
@@ -366,178 +512,324 @@ function InputPanel({ onPlay, status, gloss, modelRaw, modelDebug, hasSubmitted,
     setRecording(false);
   };
 
-  const busy = status === "loading";
+  const handleImageFile = async (file) => {
+    if (!file) { setImageFile(null); setImagePreview(null); return; }
+    setImageFile(file);
+    const dataUrl = await fileToDataURL(file);
+    setImagePreview(dataUrl);
+  };
+
+  const clearInput = () => {
+    setText("");
+    setImageFile(null);
+    setImagePreview(null);
+  };
+
+  const handleKeyDown = (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
+  };
 
   return (
-    <div style={panelStyle}>
-      <div style={{ fontWeight: 600, marginBottom: 6 }}>Speak / type / show me something</div>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="e.g. What is your name?"
-        rows={2}
-        style={textareaStyle}
-        disabled={busy}
-      />
-      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", justifyContent: "center" }}>
-        <label style={btnStyle(busy)}>
-          {imageFile ? `📷 ${imageFile.name}` : "📷 Image"}
-          <input
-            type="file"
-            accept="image/*"
-            style={{ display: "none" }}
-            onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
-            disabled={busy}
-          />
-        </label>
-        {!recording ? (
-          <button style={btnStyle(busy)} onClick={startRecording} disabled={busy}>🎤 Record</button>
-        ) : (
-          <button style={{ ...btnStyle(false), background: "#cc3344", color: "#fff" }} onClick={stopRecording}>
-            ■ Stop
+    <section className="col-input">
+      <p className="lede">Step 1 of 2</p>
+      <h1>What should they <em>sign</em>?</h1>
+      <p className="lede" style={{ marginTop: -4 }}>
+        Type, speak, or drop an image — we'll convert it into ISL gloss and play it on the avatar.
+      </p>
+
+      {/* Mode tabs */}
+      <div className="mode-tabs" role="tablist">
+        {[
+          { id: "text",  label: "Text",  icon: <TextIcon /> },
+          { id: "voice", label: "Voice", icon: <MicIcon /> },
+          { id: "image", label: "Image", icon: <ImageIcon /> },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            className={`mode-tab${mode === tab.id ? " active" : ""}`}
+            onClick={() => setMode(tab.id)}
+            role="tab"
+            aria-selected={mode === tab.id}
+          >
+            {tab.icon}
+            {tab.label}
           </button>
-        )}
-        <button
-          style={{ ...btnStyle(busy), background: "#2855aa", color: "#fff" }}
-          onClick={submit}
-          disabled={busy || (!text.trim() && !imageFile)}
-        >
-          {busy ? "Working…" : "▶ Sign it"}
-        </button>
-        {imageFile && (
-          <button style={btnStyle(busy)} onClick={() => setImageFile(null)} disabled={busy}>
-            Clear image
-          </button>
-        )}
+        ))}
       </div>
-      {hasSubmitted && (
-        <div style={glossBoxStyle}>
-          <div style={{ fontSize: 11, color: "#5a6478", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>
-            ISL Gloss (model output)
-          </div>
-          <div style={{ fontFamily: "ui-monospace, Menlo, Consolas, monospace", fontSize: 18, fontWeight: 600, color: "#1a2030", letterSpacing: 1, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-            {status === "loading" ? (
-              <span style={{ color: "#5a6478", fontWeight: 500, fontSize: 15 }}>⏳ waiting for model…</span>
-            ) : (
-              gloss || modelRaw || <span style={{ color: "#aa2222" }}>(empty — model returned no content)</span>
-            )}
-          </div>
-          {modelRaw && gloss && modelRaw !== gloss && (
-            <div style={{ marginTop: 4, fontSize: 11, color: "#5a6478" }}>
-              raw: <span style={{ fontFamily: "monospace" }}>{JSON.stringify(modelRaw)}</span>
+
+      {/* Input card */}
+      <div className="input-card">
+        <div className="body">
+          {mode === "text" && (
+            <textarea
+              className="input-textarea"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="e.g. You have a fever. Please come to floor 2."
+              disabled={busy}
+              maxLength={500}
+            />
+          )}
+
+          {mode === "voice" && (
+            <div className="voice-rec">
+              <button
+                className={`voice-btn${recording ? " rec" : ""}`}
+                onClick={recording ? stopRecording : startRecording}
+                disabled={busy}
+                aria-label={recording ? "Stop recording" : "Record"}
+              >
+                <MicIcon size={32} />
+              </button>
+              <div className="voice-hint">
+                {recording
+                  ? "Listening… tap again to stop"
+                  : "Tap to record · we'll transcribe and translate"}
+              </div>
+              {recording && (
+                <div className="voice-wave">
+                  {[...Array(6)].map((_, i) => <span key={i} />)}
+                </div>
+              )}
             </div>
           )}
-          {modelDebug && (
-            <details style={{ marginTop: 6, fontSize: 11, color: "#5a6478", textAlign: "left" }}>
-              <summary style={{ cursor: "pointer", textAlign: "center" }}>raw HTTP response</summary>
-              <pre style={{
-                marginTop: 4, padding: 8, background: "#f7f8fb", border: "1px solid #dde2eb",
-                borderRadius: 4, maxHeight: 180, overflow: "auto", whiteSpace: "pre-wrap",
-                wordBreak: "break-word", fontSize: 11,
-              }}>{modelDebug}</pre>
-            </details>
+
+          {mode === "image" && !imageFile && (
+            <label className="image-drop" htmlFor="fileInp">
+              <div className="ico"><UploadIcon /></div>
+              <div className="t">Drop an image or click to upload</div>
+              <div className="s">JPG, PNG, WebP · Multimodal model will describe + translate</div>
+              <input
+                type="file"
+                id="fileInp"
+                accept="image/*"
+                className="sr-only"
+                onChange={(e) => handleImageFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
           )}
-          {matched && matched.length > 0 && (
-            <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
-              {matched.map((w, i) => (
-                <span
-                  key={`${w}-${i}`}
-                  style={{
-                    padding: "3px 10px",
-                    borderRadius: 999,
-                    fontSize: 13,
-                    fontWeight: 600,
-                    fontFamily: "ui-monospace, Menlo, Consolas, monospace",
-                    background: i === activeWordIdx ? "#2855aa" : "#dbe3f4",
-                    color: i === activeWordIdx ? "#fff" : "#3a4a6b",
-                    boxShadow: i === activeWordIdx ? "0 0 0 3px rgba(40,85,170,0.25)" : "none",
-                    transition: "background 120ms, color 120ms, box-shadow 120ms",
-                  }}
-                >
-                  {w}
-                </span>
-              ))}
-            </div>
-          )}
-          {skipped && skipped.length > 0 && (
-            <div style={{ marginTop: 6, fontSize: 12, color: "#8a6a1f" }}>
-              Skipped (no clip): {skipped.join(", ")}
+
+          {mode === "image" && imageFile && (
+            <div className="image-preview">
+              {imagePreview
+                ? <img src={imagePreview} alt={imageFile.name} className="image-thumb" />
+                : <div className="image-thumb" />
+              }
+              <div className="meta">
+                <div className="n">{imageFile.name}</div>
+                <div className="s">{(imageFile.size / 1024).toFixed(1)} KB</div>
+              </div>
+              <button className="image-clear-btn" onClick={() => handleImageFile(null)}>
+                Clear
+              </button>
             </div>
           )}
         </div>
-      )}
-      {error && (
-        <div style={{ marginTop: 6, fontSize: 12, color: "#aa2222" }}>⚠ {error}</div>
-      )}
-    </div>
+
+        <div className="footer">
+          <div style={{ display: "flex", gap: 2 }}>
+            <button className="icon-btn" onClick={clearInput} title="Clear" aria-label="Clear">
+              <TrashIcon />
+            </button>
+            <button
+              className="icon-btn"
+              title="Load example"
+              aria-label="Load example"
+              onClick={() => { setText("You have a fever"); setMode("text"); }}
+            >
+              <InfoIcon />
+            </button>
+          </div>
+          <div className="char-count">
+            <span>{mode === "text" ? text.length : 0}</span> / 500
+          </div>
+        </div>
+      </div>
+
+      {/* CTA */}
+      <button
+        className={`cta${busy ? " loading" : ""}`}
+        onClick={submit}
+        disabled={busy || (!text.trim() && !imageFile)}
+      >
+        {busy ? (
+          <><span className="spin" />Translating with Gemma…</>
+        ) : (
+          <>
+            <PlayIcon size={16} />
+            Sign it
+            <span style={{ opacity: 0.5, fontWeight: 400, marginLeft: "auto", fontSize: 12 }}>⏎</span>
+          </>
+        )}
+      </button>
+
+      {/* Gloss output card */}
+      <div className="gloss-card" data-state={glossCardState}>
+        <div className="gloss-head">
+          <span className="gloss-label">ISL Gloss · model output</span>
+          <span className="gloss-status">
+            <span className="pulse" />
+            {glossStatusText}
+          </span>
+        </div>
+
+        {/* Ready state */}
+        <div className="gloss-state state-ready">
+          <div className="gloss-display">
+            {matched.length > 0
+              ? matched.map((w) => w.toUpperCase()).join(" ")
+              : <span className="placeholder">Enter text and press Sign it</span>
+            }
+          </div>
+          {matched.length > 0 && (
+            <>
+              <div className="gloss-chips">
+                {matched.map((w, i) => (
+                  <span
+                    key={`${w}-${i}`}
+                    className={`chip${i === activeWordIdx ? " active" : ""}`}
+                  >
+                    {w.toUpperCase()}
+                  </span>
+                ))}
+                {skipped.map((w, i) => (
+                  <span key={`s-${w}-${i}`} className="chip skipped">{w}</span>
+                ))}
+              </div>
+              <div className="gloss-meta">
+                <span><b>{matched.length}</b> matched</span>
+                <span><b>{skipped.length}</b> skipped</span>
+                <span>· model: <b>gemma-isl</b></span>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Loading state */}
+        <div className="gloss-state state-loading">
+          <div className="loading-row">
+            <span className="loading-spinner" />
+            <div>
+              <div className="loading-title">Translating with Gemma…</div>
+              <div className="loading-sub">
+                Avatar is signing <b>PLEASE WAIT</b> while the model thinks.
+              </div>
+            </div>
+          </div>
+          <div className="skeleton-line w-80" />
+          <div className="skeleton-chips">
+            <span /><span /><span />
+          </div>
+        </div>
+
+        {/* Error state */}
+        <div className="gloss-state state-error">
+          <div className="error-row">
+            <span className="error-icon">!</span>
+            <div>
+              <div className="error-title">Model returned no usable gloss</div>
+              <div className="error-sub">
+                {error
+                  ? error.replace(/\.$/, "") + ". "
+                  : "None of the words matched the dictionary. "}
+                Avatar is signing <b>ERROR</b>. Try a phrase using the available words below.
+              </div>
+            </div>
+          </div>
+          <div className="error-actions">
+            <button className="error-btn primary" onClick={onRetry}>↻ Retry</button>
+            <button
+              className="error-btn"
+              onClick={() => {
+                setDictOpen(true);
+                setTimeout(() => {
+                  document.getElementById("dictPanel")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                }, 50);
+              }}
+            >
+              View dictionary
+            </button>
+          </div>
+        </div>
+
+        {/* Footer: dict toggle + raw HTTP */}
+        <div className="gloss-footer">
+          <button
+            className="link-btn"
+            onClick={() => setDictOpen((o) => !o)}
+            aria-expanded={dictOpen}
+            aria-controls="dictPanel"
+          >
+            <BookIcon />
+            Available words
+            <span className="pill-count">{DICTIONARY.length}</span>
+            <span className="chev" style={{ transform: dictOpen ? "rotate(180deg)" : "none" }}>
+              <ChevDownIcon />
+            </span>
+          </button>
+          {modelDebug && (
+            <details className="raw-resp">
+              <summary>Raw HTTP</summary>
+              <pre>{modelDebug}</pre>
+            </details>
+          )}
+        </div>
+
+        {/* Dictionary panel */}
+        {dictOpen && (
+          <div className="dict-panel" id="dictPanel">
+            <div className="dict-head">
+              <span className="dict-title">Words I can sign</span>
+              <span className="dict-hint">
+                Phrases must use these — model maps to closest match
+              </span>
+            </div>
+            <div className="dict-grid">
+              {DICTIONARY.map((word) => (
+                <button
+                  key={word}
+                  className="dict-word"
+                  title={`Preview "${word}" sign`}
+                  onClick={() => onDictPreview(word)}
+                >
+                  <span className="play-ico">▶</span>
+                  {word.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            <div className="dict-foot">
+              <span className="dict-hint">
+                Try: "<b>You</b> have a <b>fever</b>" · "<b>What</b> is <b>your name</b>" · "<b>Caution</b> · <b>wet floor</b>"
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
-const panelStyle = {
-  position: "absolute",
-  top: 12,
-  left: 12,
-  width: "min(380px, calc(100vw - 24px))",
-  maxHeight: "calc(100vh - 24px)",
-  overflowY: "auto",
-  background: "rgba(255,255,255,0.92)",
-  backdropFilter: "blur(6px)",
-  border: "1px solid #cdd2da",
-  borderRadius: 10,
-  padding: 12,
-  fontFamily: "system-ui, sans-serif",
-  fontSize: 14,
-  boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-  zIndex: 10,
-  textAlign: "center",
-};
-const glossBoxStyle = {
-  marginTop: 10,
-  padding: "8px 12px",
-  background: "#f0f4ff",
-  border: "1px solid #b9c8ee",
-  borderRadius: 8,
-  textAlign: "center",
-};
-const textareaStyle = {
-  width: "100%",
-  resize: "vertical",
-  border: "1px solid #cdd2da",
-  borderRadius: 6,
-  padding: 8,
-  fontFamily: "inherit",
-  fontSize: 14,
-  boxSizing: "border-box",
-};
-const btnStyle = (disabled) => ({
-  padding: "6px 12px",
-  borderRadius: 6,
-  border: "1px solid #cdd2da",
-  background: "#f4f6fa",
-  cursor: disabled ? "not-allowed" : "pointer",
-  opacity: disabled ? 0.6 : 1,
-  fontSize: 13,
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-});
-
-// ─── App ─────────────────────────────────────────────────────────────────────
+// ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [frames, setFrames] = useState([]);
-  const [wordRanges, setWordRanges] = useState([]);
-  const [matched, setMatched] = useState([]);
-  const [skipped, setSkipped] = useState([]);
+  const [frames, setFrames]           = useState([]);
+  const [wordRanges, setWordRanges]   = useState([]);
+  const [matched, setMatched]         = useState([]);
+  const [skipped, setSkipped]         = useState([]);
   const [activeWordIdx, setActiveWordIdx] = useState(-1);
-  const [status, setStatus] = useState("idle"); // idle | loading | ready
-  const [gloss, setGloss] = useState("");      // cleaned gloss line
-  const [modelRaw, setModelRaw] = useState(""); // raw LLM message content
-  const [modelDebug, setModelDebug] = useState(""); // full HTTP response body
+  const [status, setStatus]           = useState("idle");
+  const [gloss, setGloss]             = useState("");
+  const [modelDebug, setModelDebug]   = useState("");
   const [hasSubmitted, setHasSubmitted] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError]             = useState(null);
+  const [isPlaying, setIsPlaying]     = useState(true);
+  const [speed, setSpeed]             = useState(1.0);
 
-  // Load a default greeting clip on first mount so the avatar has something
-  // to play before the user submits anything.
+  const controlRef     = useRef(null);
+  const progressFillRef = useRef(null);
+  const lastSubmitRef  = useRef({ text: "", imageDataUrl: null });
+
+  // Default animation on mount
   useEffect(() => {
     loadClipFrames(["You", "Fever"])
       .then(({ frames: f, wordRanges: wr }) => {
@@ -545,33 +837,41 @@ export default function App() {
         setWordRanges(wr);
         setMatched(["You", "Fever"]);
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => console.warn("Default clip load failed:", e.message));
+  }, []);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT") return;
+      if (e.code === "Space") { e.preventDefault(); setIsPlaying((p) => !p); }
+      if (e.code === "KeyR")  { setIsPlaying(true); controlRef.current?.jumpToWord(0); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   const handlePlay = useCallback(async ({ text, imageDataUrl }) => {
+    lastSubmitRef.current = { text, imageDataUrl };
     setStatus("loading");
     setError(null);
     setGloss("");
-    setModelRaw("");
     setModelDebug("");
     setMatched([]);
     setSkipped([]);
     setActiveWordIdx(-1);
     setHasSubmitted(true);
+    setIsPlaying(true);
     try {
       const { raw, cleaned, debug, httpError } = await fetchGloss({ text, imageDataUrl });
-      // Always surface what the model returned, even if matching fails.
-      setModelRaw(raw);
       setGloss(cleaned);
       setModelDebug(debug || "");
-      if (httpError) throw new Error(`llama.cpp ${httpError} — see raw HTTP response below`);
+      if (httpError) throw new Error(`llama.cpp ${httpError}`);
       const { matched: m, skipped: s } = glossToClipNames(cleaned);
       setMatched(m);
       setSkipped(s);
       if (m.length === 0) {
-        throw new Error(
-          `No words in gloss matched the dictionary. Available: ${DICTIONARY.join(", ")}`,
-        );
+        throw new Error(`No words matched. Available: ${DICTIONARY.join(", ")}`);
       }
       const { frames: newFrames, wordRanges: newRanges } = await loadClipFrames(m);
       setFrames(newFrames);
@@ -583,36 +883,197 @@ export default function App() {
     }
   }, []);
 
+  const handleRetry = useCallback(() => {
+    const last = lastSubmitRef.current;
+    if (last.text || last.imageDataUrl) handlePlay(last);
+  }, [handlePlay]);
+
+  const handleDictPreview = useCallback(async (word) => {
+    try {
+      const { frames: f, wordRanges: wr } = await loadClipFrames([word]);
+      setFrames(f);
+      setWordRanges(wr);
+      setMatched([word]);
+      setSkipped([]);
+      setActiveWordIdx(-1);
+      setIsPlaying(true);
+    } catch (e) {
+      console.warn("Dict preview failed:", e.message);
+    }
+  }, []);
+
+  const handleProgress = useCallback((ratio) => {
+    if (progressFillRef.current) {
+      progressFillRef.current.style.transform = `scaleX(${ratio})`;
+    }
+  }, []);
+
+  const nowSigningWord = (() => {
+    if (status === "loading") return "PLEASE WAIT";
+    if (error)               return "ERROR";
+    if (activeWordIdx >= 0 && matched[activeWordIdx]) return matched[activeWordIdx].toUpperCase();
+    if (matched.length > 0) return matched[0].toUpperCase();
+    return "—";
+  })();
+
+  const totalSecs = matched.length > 0
+    ? Math.round(frames.length / FPS)
+    : 0;
+  const formatTime = (s) =>
+    `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
   return (
-    <div style={{ width: "100vw", height: "100vh", background: BG_COLOR, overflow: "hidden" }}>
-      <Canvas
-        camera={{ position: [0, 1.4, 3], fov: 35, near: 0.01, far: 100 }}
-        gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
-      >
-        <color attach="background" args={[BG_COLOR]} />
-        <Lights />
-        <Suspense fallback={null}>
-          {frames.length > 0 && (
-            <VRMScene
-              frames={frames}
-              wordRanges={wordRanges}
-              onWordChange={setActiveWordIdx}
-            />
-          )}
-        </Suspense>
-      </Canvas>
-      <InputPanel
-        onPlay={handlePlay}
-        status={status}
-        gloss={gloss}
-        modelRaw={modelRaw}
-        modelDebug={modelDebug}
-        hasSubmitted={hasSubmitted}
-        matched={matched}
-        skipped={skipped}
-        activeWordIdx={activeWordIdx}
-        error={error}
-      />
-    </div>
+    <>
+      <div className="bg-noise" aria-hidden="true" />
+      <div className="shell">
+        <Topbar status={status} />
+
+        <main className="main">
+          <InputPanel
+            onPlay={handlePlay}
+            onRetry={handleRetry}
+            onDictPreview={handleDictPreview}
+            status={status}
+            matched={matched}
+            skipped={skipped}
+            activeWordIdx={activeWordIdx}
+            error={error}
+            modelDebug={modelDebug}
+            hasSubmitted={hasSubmitted}
+          />
+
+          {/* ── Right: Stage ── */}
+          <section className="col-stage">
+            <div className="stage">
+              {/* Stage head */}
+              <div className="stage-head">
+                <div className="now-signing">
+                  <span className="live-dot">●</span>
+                  <div>
+                    <div className="lbl">Now signing</div>
+                    <div className="word">{nowSigningWord}</div>
+                  </div>
+                </div>
+                <div className="stage-tools">
+                  <button className="stage-tool" title="Captions"><CaptionsIcon /></button>
+                  <button className="stage-tool" title="Fullscreen"><FullscreenIcon /></button>
+                </div>
+              </div>
+
+              {/* Avatar canvas */}
+              <div className="stage-canvas">
+                <div className="avatar-stage">
+                  <div className="avatar-shadow" />
+                  <Canvas
+                    camera={{ position: [0, 1.4, 3], fov: 35, near: 0.01, far: 100 }}
+                    gl={{
+                      antialias: true,
+                      alpha: true,
+                      toneMapping: THREE.ACESFilmicToneMapping,
+                    }}
+                    style={{ width: "100%", height: "100%" }}
+                  >
+                    <Lights />
+                    <Suspense fallback={null}>
+                      {frames.length > 0 && (
+                        <VRMScene
+                          frames={frames}
+                          wordRanges={wordRanges}
+                          onWordChange={setActiveWordIdx}
+                          playing={isPlaying}
+                          speed={speed}
+                          onProgress={handleProgress}
+                          controlRef={controlRef}
+                        />
+                      )}
+                    </Suspense>
+                  </Canvas>
+                </div>
+              </div>
+
+              {/* Progress bar */}
+              <div className="stage-progress">
+                <span className="time">00:00</span>
+                <div className="progress-track">
+                  <div className="progress-marks">
+                    {matched.map((_, i) => (
+                      <div key={i} className="seg" />
+                    ))}
+                  </div>
+                  <div className="progress-fill" ref={progressFillRef} />
+                </div>
+                <span className="time">{formatTime(totalSecs)}</span>
+              </div>
+
+              {/* Stage controls */}
+              <div className="stage-controls">
+                <button
+                  className="stage-ctrl"
+                  title="Previous word"
+                  onClick={() => {
+                    const idx = Math.max(0, activeWordIdx - 1);
+                    controlRef.current?.jumpToWord(idx);
+                  }}
+                >
+                  <PrevIcon />
+                </button>
+
+                <button
+                  className="stage-ctrl play"
+                  onClick={() => setIsPlaying((p) => !p)}
+                >
+                  {isPlaying ? <><PauseIcon /> Pause</> : <><PlayIcon /> Play</>}
+                </button>
+
+                <button
+                  className="stage-ctrl"
+                  title="Replay"
+                  onClick={() => { setIsPlaying(true); controlRef.current?.jumpToWord(0); }}
+                >
+                  <ReplayIcon />
+                </button>
+
+                <button
+                  className="stage-ctrl"
+                  title="Next word"
+                  onClick={() => {
+                    const idx = Math.min(matched.length - 1, activeWordIdx + 1);
+                    controlRef.current?.jumpToWord(idx);
+                  }}
+                >
+                  <NextIcon />
+                </button>
+
+                <span className="ctrl-div" />
+
+                <div className="speed-toggle" role="group" aria-label="Playback speed">
+                  {[0.5, 1.0, 1.5].map((s) => (
+                    <button
+                      key={s}
+                      className={speed === s ? "on" : ""}
+                      onClick={() => setSpeed(s)}
+                    >
+                      {s === 1.0 ? "1.0×" : `${s}×`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Stage footer */}
+            <div className="stage-footer">
+              <span>
+                Press <span className="kbd">⏎</span> to sign ·{" "}
+                <span className="kbd">␣</span> to pause ·{" "}
+                <span className="kbd">R</span> to replay
+              </span>
+              <span style={{ marginLeft: "auto" }}>
+                Avatar: <b style={{ color: "var(--ink-2)" }}>remmy.vrm</b> · 25 fps
+              </span>
+            </div>
+          </section>
+        </main>
+      </div>
+    </>
   );
 }
