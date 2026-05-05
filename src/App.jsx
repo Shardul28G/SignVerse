@@ -154,7 +154,7 @@ function VRMScene({ frames, wordRanges, onWordChange }) {
   return (
     <>
       <group ref={groupRef} />
-      {vrm && <FitCameraToObject object={vrm.scene} padding={1.6} />}
+      {vrm && <FitCameraToObject object={vrm.scene} padding={1.05} />}
     </>
   );
 }
@@ -416,7 +416,11 @@ function InputPanel({ onPlay, status, gloss, modelRaw, modelDebug, hasSubmitted,
             ISL Gloss (model output)
           </div>
           <div style={{ fontFamily: "ui-monospace, Menlo, Consolas, monospace", fontSize: 18, fontWeight: 600, color: "#1a2030", letterSpacing: 1, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-            {gloss || modelRaw || <span style={{ color: "#aa2222" }}>(empty — model returned no content)</span>}
+            {status === "loading" ? (
+              <span style={{ color: "#5a6478", fontWeight: 500, fontSize: 15 }}>⏳ waiting for model…</span>
+            ) : (
+              gloss || modelRaw || <span style={{ color: "#aa2222" }}>(empty — model returned no content)</span>
+            )}
           </div>
           {modelRaw && gloss && modelRaw !== gloss && (
             <div style={{ marginTop: 4, fontSize: 11, color: "#5a6478" }}>
