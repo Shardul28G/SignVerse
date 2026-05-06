@@ -33,7 +33,10 @@ const SYSTEM_PROMPT =
   "Convert the user's input into an ISL gloss line. " +
   "ISL gloss is a sequence of uppercase keyword tokens in topic-comment order, " +
   "with no articles, no auxiliary verbs, and no punctuation. " +
-  "Reply with ONLY the gloss line — no quotes, no explanation, no extra text.";
+  "You MUST always produce output. " +
+  "After any internal reasoning, your final output MUST be a single line containing ONLY the ISL gloss tokens — " +
+  "no quotes, no labels, no explanation, no extra text. " +
+  "If you are unsure, make your best attempt rather than returning nothing.";
 
 // ─── SVG icon helpers ─────────────────────────────────────────────────────────
 const Ico = ({ d, size = 14, fill = "none", sw = 2 }) => (
@@ -369,13 +372,23 @@ async function loadClipFrames(clipNames) {
 }
 
 // ─── LLM call ─────────────────────────────────────────────────────────────────
-async function fetchGloss({ text, imageDataUrl }) {
-  const userContent = imageDataUrl
-    ? [
-        { type: "text", text: text || "Describe this image, then convert to ISL gloss." },
-        { type: "image_url", image_url: { url: imageDataUrl } },
-      ]
-    : text;
+async function fetchGloss({ text, imageDataUrl, audioDataUrl }) {
+  let userContent;
+  if (audioDataUrl) {
+    // Strip data-URL prefix → raw base64 for input_audio (Gemma 4 E2B audio conformer)
+    const base64 = audioDataUrl.split(",")[1];
+    userContent = [
+      { type: "text", text: "Listen to this audio and convert the speech to ISL gloss." },
+      { type: "input_audio", input_audio: { data: base64, format: "wav" } },
+    ];
+  } else if (imageDataUrl) {
+    userContent = [
+      { type: "text", text: text || "Describe this image, then convert to ISL gloss." },
+      { type: "image_url", image_url: { url: imageDataUrl } },
+    ];
+  } else {
+    userContent = text;
+  }
 
   const body = {
     model: "gemma",
@@ -388,31 +401,44 @@ async function fetchGloss({ text, imageDataUrl }) {
     stream: false,
   };
 
+  console.log("[Gemma] → request body:", JSON.stringify(body, null, 2));
   const resp = await fetch(LLAMA_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   const respText = await resp.text();
+  console.log("[Gemma] ← HTTP", resp.status, "raw response:\n", respText);
   let data = null;
   try { data = JSON.parse(respText); } catch { /* leave as raw text */ }
   if (!resp.ok) {
     return { raw: "", cleaned: "", debug: respText, httpError: `HTTP ${resp.status}` };
   }
   const raw = data?.choices?.[0]?.message?.content ?? "";
-  const cleaned = raw.trim().replace(/^["'`]+|["'`]+$/g, "").replace(/[.!?]+$/, "").trim();
-  return { raw, cleaned, debug: respText, httpError: null };
+  // Strip <think>…</think> reasoning blocks the model may emit
+  const afterThinking = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  const cleaned = afterThinking.replace(/^["'`]+|["'`]+$/g, "").replace(/[.!?]+$/, "").trim();
+  console.log("[Gemma] content:", raw, "→ after-think:", afterThinking, "→ cleaned:", cleaned);
+  return { raw: afterThinking, cleaned, debug: respText, httpError: null };
 }
 
-// ─── Browser speech recognition ───────────────────────────────────────────────
-function getSpeechRecognition() {
-  const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Ctor) return null;
-  const rec = new Ctor();
-  rec.continuous = false;
-  rec.interimResults = false;
-  rec.lang = "en-IN";
-  return rec;
+// ─── WAV encoder (PCM Float32 → 16-bit WAV ArrayBuffer) ──────────────────────
+function encodeWav(samples, sampleRate) {
+  const dataSize = samples.length * 2;
+  const buf = new ArrayBuffer(44 + dataSize);
+  const v = new DataView(buf);
+  const ws = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  ws(0, "RIFF"); v.setUint32(4, 36 + dataSize, true);
+  ws(8, "WAVE"); ws(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true); ws(36, "data"); v.setUint32(40, dataSize, true);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return buf;
 }
 
 function fileToDataURL(file) {
@@ -422,6 +448,56 @@ function fileToDataURL(file) {
     r.onerror = reject;
     r.readAsDataURL(file);
   });
+}
+
+// ─── Custom audio player ─────────────────────────────────────────────────────
+function AudioPlayer({ src }) {
+  const audioRef = useRef(null);
+  const [playing, setPlaying] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    playing ? a.pause() : a.play();
+    setPlaying(!playing);
+  };
+
+  const fmt = (s) =>
+    `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+  const progress = duration ? current / duration : 0;
+
+  return (
+    <div className="audio-player">
+      <audio
+        ref={audioRef}
+        src={src}
+        onTimeUpdate={(e) => setCurrent(e.target.currentTime)}
+        onDurationChange={(e) => setDuration(e.target.duration)}
+        onEnded={() => { setPlaying(false); setCurrent(0); }}
+      />
+      <button className="ap-btn" onClick={toggle} aria-label={playing ? "Pause" : "Play"}>
+        {playing ? <PauseIcon size={16} /> : <PlayIcon size={16} />}
+      </button>
+      <div className="ap-track">
+        <div className="ap-bar-wrap">
+          <div className="ap-bar-fill" style={{ width: `${progress * 100}%` }} />
+          <input
+            type="range" min={0} max={duration || 1} step={0.01} value={current}
+            className="ap-scrubber"
+            onChange={(e) => {
+              const t = +e.target.value;
+              audioRef.current.currentTime = t;
+              setCurrent(t);
+            }}
+          />
+        </div>
+        <div className="ap-time">{fmt(current)} / {fmt(duration)}</div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Topbar ───────────────────────────────────────────────────────────────────
@@ -466,7 +542,10 @@ function InputPanel({
   const [imagePreview, setImagePreview] = useState(null);
   const [recording, setRecording] = useState(false);
   const [dictOpen, setDictOpen] = useState(false);
-  const recRef = useRef(null);
+  const [audioUrl, setAudioUrl] = useState(null);       // object URL for <audio> preview
+  const [audioDataUrl, setAudioDataUrl] = useState(null); // base64 data URL for API
+  const audioNodesRef = useRef(null); // { ctx, source, processor, stream }
+  const samplesRef = useRef([]);
 
   const busy = status === "loading";
 
@@ -483,33 +562,59 @@ function InputPanel({
   })();
 
   const submit = async () => {
-    if (!text.trim() && !imageFile) return;
+    if (!text.trim() && !imageFile && !audioDataUrl) return;
     let imageDataUrl = null;
     if (imageFile) imageDataUrl = await fileToDataURL(imageFile);
-    onPlay({ text: text.trim(), imageDataUrl });
+    onPlay({ text: text.trim(), imageDataUrl, audioDataUrl });
   };
 
-  const startRecording = () => {
-    const rec = getSpeechRecognition();
-    if (!rec) {
-      alert("SpeechRecognition not supported in this browser. Try Chrome.");
-      return;
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctx = new AudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+      // ScriptProcessorNode collects raw PCM float32 samples
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      samplesRef.current = [];
+      processor.onaudioprocess = (e) => {
+        samplesRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      source.connect(processor);
+      processor.connect(ctx.destination);
+      audioNodesRef.current = { ctx, source, processor, stream };
+      setRecording(true);
+      // Clear any prior recording
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      setAudioUrl(null);
+      setAudioDataUrl(null);
+    } catch {
+      alert("Microphone access denied. Please allow microphone access in your browser.");
     }
-    recRef.current = rec;
-    setRecording(true);
-    rec.onresult = (e) => {
-      const transcript = e.results[0][0].transcript;
-      setText((prev) => (prev ? `${prev} ${transcript}` : transcript));
-      setMode("text");
-    };
-    rec.onend = () => setRecording(false);
-    rec.onerror = () => setRecording(false);
-    rec.start();
   };
 
-  const stopRecording = () => {
-    recRef.current?.stop();
+  const stopRecording = async () => {
+    const nodes = audioNodesRef.current;
+    if (!nodes) return;
+    const { ctx, source, processor, stream } = nodes;
+    source.disconnect();
+    processor.disconnect();
+    stream.getTracks().forEach((t) => t.stop());
+    const sampleRate = ctx.sampleRate;
+    await ctx.close();
+    audioNodesRef.current = null;
     setRecording(false);
+
+    // Merge all PCM chunks and encode as WAV
+    const total = samplesRef.current.reduce((n, c) => n + c.length, 0);
+    const merged = new Float32Array(total);
+    let off = 0;
+    for (const chunk of samplesRef.current) { merged.set(chunk, off); off += chunk.length; }
+    const wavBuf = encodeWav(merged, sampleRate);
+    const blob = new Blob([wavBuf], { type: "audio/wav" });
+    const objUrl = URL.createObjectURL(blob);
+    setAudioUrl(objUrl);
+    const dataUrl = await fileToDataURL(blob);
+    setAudioDataUrl(dataUrl);
   };
 
   const handleImageFile = async (file) => {
@@ -523,15 +628,28 @@ function InputPanel({
     setText("");
     setImageFile(null);
     setImagePreview(null);
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    setAudioUrl(null);
+    setAudioDataUrl(null);
   };
 
   const handleKeyDown = (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
   };
 
+  // Paste image from clipboard (Ctrl+V / Cmd+V) when in image mode
+  useEffect(() => {
+    const onPaste = (e) => {
+      if (mode !== "image") return;
+      const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
+      if (item) handleImageFile(item.getAsFile());
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [mode]);
+
   return (
     <section className="col-input">
-      <p className="lede">Step 1 of 2</p>
       <h1>What should they <em>sign</em>?</h1>
       <p className="lede" style={{ marginTop: -4 }}>
         Type, speak, or drop an image — we'll convert it into ISL gloss and play it on the avatar.
@@ -578,28 +696,31 @@ function InputPanel({
                 className={`voice-btn${recording ? " rec" : ""}`}
                 onClick={recording ? stopRecording : startRecording}
                 disabled={busy}
-                aria-label={recording ? "Stop recording" : "Record"}
+                aria-label={recording ? "Stop recording" : audioUrl ? "Re-record" : "Start recording"}
               >
                 <MicIcon size={32} />
               </button>
               <div className="voice-hint">
                 {recording
                   ? "Listening… tap again to stop"
-                  : "Tap to record · we'll transcribe and translate"}
+                  : audioUrl
+                  ? "Audio captured · tap Sign it below, or re-record"
+                  : "Tap to record · raw audio sent directly to Gemma 4"}
               </div>
               {recording && (
                 <div className="voice-wave">
                   {[...Array(6)].map((_, i) => <span key={i} />)}
                 </div>
               )}
+              {!recording && audioUrl && <AudioPlayer src={audioUrl} />}
             </div>
           )}
 
           {mode === "image" && !imageFile && (
             <label className="image-drop" htmlFor="fileInp">
               <div className="ico"><UploadIcon /></div>
-              <div className="t">Drop an image or click to upload</div>
-              <div className="s">JPG, PNG, WebP · Multimodal model will describe + translate</div>
+              <div className="t">Drop, paste, or click to upload</div>
+              <div className="s">JPG, PNG, WebP · or Ctrl+V to paste from clipboard</div>
               <input
                 type="file"
                 id="fileInp"
@@ -651,7 +772,7 @@ function InputPanel({
       <button
         className={`cta${busy ? " loading" : ""}`}
         onClick={submit}
-        disabled={busy || (!text.trim() && !imageFile)}
+        disabled={busy || (!text.trim() && !imageFile && !audioDataUrl)}
       >
         {busy ? (
           <><span className="spin" />Translating with Gemma…</>
@@ -851,8 +972,8 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const handlePlay = useCallback(async ({ text, imageDataUrl }) => {
-    lastSubmitRef.current = { text, imageDataUrl };
+  const handlePlay = useCallback(async ({ text, imageDataUrl, audioDataUrl }) => {
+    lastSubmitRef.current = { text, imageDataUrl, audioDataUrl };
     setStatus("loading");
     setError(null);
     setGloss("");
@@ -864,7 +985,7 @@ export default function App() {
     setIsPlaying(true);
 
     // ── Start the LLM call IMMEDIATELY (parallel with clip loading) ────────
-    const llmPromise = fetchGloss({ text, imageDataUrl });
+    const llmPromise = fetchGloss({ text, imageDataUrl, audioDataUrl });
 
     // ── Load and show Please → Wait while the model thinks ─────────────────
     let waitStartTime = 0;
@@ -939,7 +1060,7 @@ export default function App() {
 
   const handleRetry = useCallback(() => {
     const last = lastSubmitRef.current;
-    if (last.text || last.imageDataUrl) handlePlay(last);
+    if (last.text || last.imageDataUrl || last.audioDataUrl) handlePlay(last);
   }, [handlePlay]);
 
   const handleDictPreview = useCallback(async (word) => {
