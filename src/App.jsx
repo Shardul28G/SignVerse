@@ -733,7 +733,7 @@ function InputPanel({
                 {error
                   ? error.replace(/\.$/, "") + ". "
                   : "None of the words matched the dictionary. "}
-                Avatar is signing <b>ERROR</b>. Try a phrase using the available words below.
+                Avatar is signing <b>PROBLEM</b>. Try a phrase using the available words below.
               </div>
             </div>
           </div>
@@ -825,17 +825,17 @@ export default function App() {
   const [isPlaying, setIsPlaying]     = useState(true);
   const [speed, setSpeed]             = useState(1.0);
 
-  const controlRef     = useRef(null);
+  const controlRef      = useRef(null);
   const progressFillRef = useRef(null);
-  const lastSubmitRef  = useRef({ text: "", imageDataUrl: null });
+  const lastSubmitRef   = useRef({ text: "", imageDataUrl: null });
 
   // Default animation on mount
   useEffect(() => {
-    loadClipFrames(["You", "Fever"])
+    loadClipFrames(["Hello"])
       .then(({ frames: f, wordRanges: wr }) => {
         setFrames(f);
         setWordRanges(wr);
-        setMatched(["You", "Fever"]);
+        setMatched(["Hello"]);
       })
       .catch((e) => console.warn("Default clip load failed:", e.message));
   }, []);
@@ -862,24 +862,78 @@ export default function App() {
     setActiveWordIdx(-1);
     setHasSubmitted(true);
     setIsPlaying(true);
+
+    // ── Start the LLM call IMMEDIATELY (parallel with clip loading) ────────
+    const llmPromise = fetchGloss({ text, imageDataUrl });
+
+    // ── Load and show Please → Wait while the model thinks ─────────────────
+    let waitStartTime = 0;
     try {
-      const { raw, cleaned, debug, httpError } = await fetchGloss({ text, imageDataUrl });
-      setGloss(cleaned);
-      setModelDebug(debug || "");
+      const { frames: waitF, wordRanges: waitWr } =
+        await loadClipFrames(["Please", "Wait"]);
+      setFrames(waitF);
+      setWordRanges(waitWr);
+      setMatched(["Please", "Wait"]);
+      waitStartTime = Date.now();
+    } catch (e) {
+      console.warn("Please/Wait clip load failed:", e.message);
+    }
+
+    // Please(97) + transition(15) + Wait(97) frames at 25fps ≈ 8.4s.
+    // Guarantee the avatar gets to play through both clips at least once.
+    const MIN_WAIT_MS = 8400;
+    const ensureMinPlay = async () => {
+      if (waitStartTime === 0) return;
+      const elapsed = Date.now() - waitStartTime;
+      if (elapsed < MIN_WAIT_MS) {
+        await new Promise((r) => setTimeout(r, MIN_WAIT_MS - elapsed));
+      }
+    };
+
+    try {
+      const { cleaned, debug, httpError } = await llmPromise;
+      const glossText = cleaned;
+      const debugText = debug || "";
       if (httpError) throw new Error(`llama.cpp ${httpError}`);
-      const { matched: m, skipped: s } = glossToClipNames(cleaned);
-      setMatched(m);
-      setSkipped(s);
+      const { matched: m, skipped: s } = glossToClipNames(glossText);
       if (m.length === 0) {
         throw new Error(`No words matched. Available: ${DICTIONARY.join(", ")}`);
       }
       const { frames: newFrames, wordRanges: newRanges } = await loadClipFrames(m);
+
+      // Hold the result until Please→Wait has had its full play
+      await ensureMinPlay();
+
+      setGloss(glossText);
+      setModelDebug(debugText);
+      setMatched(m);
+      setSkipped(s);
+      setActiveWordIdx(-1);
       setFrames(newFrames);
       setWordRanges(newRanges);
       setStatus("ready");
     } catch (e) {
-      setError(e.message);
+      const errorMsg = e.message;
+      let errF = null, errWr = null;
+      try {
+        const r = await loadClipFrames(["Problem"]);
+        errF = r.frames;
+        errWr = r.wordRanges;
+      } catch (e2) {
+        console.warn("Problem clip load failed:", e2.message);
+      }
+
+      await ensureMinPlay();
+
+      setError(errorMsg);
       setStatus("idle");
+      if (errF) {
+        setFrames(errF);
+        setWordRanges(errWr);
+        setMatched(["Problem"]);
+        setSkipped([]);
+        setActiveWordIdx(-1);
+      }
     }
   }, []);
 
@@ -910,7 +964,7 @@ export default function App() {
 
   const nowSigningWord = (() => {
     if (status === "loading") return "PLEASE WAIT";
-    if (error)               return "ERROR";
+    if (error)               return "PROBLEM";
     if (activeWordIdx >= 0 && matched[activeWordIdx]) return matched[activeWordIdx].toUpperCase();
     if (matched.length > 0) return matched[0].toUpperCase();
     return "—";

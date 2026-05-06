@@ -40,7 +40,7 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 button { font-family: inherit; }
@@ -59,9 +59,11 @@ h1, h2 { margin: 0; }
 /* ─── Shell ──────────────────────────────────────────────────────────────── */
 .shell {
   position: relative; z-index: 1;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: 64px 1fr;
+  overflow: hidden;
 }
 
 /* ─── Topbar ─────────────────────────────────────────────────────────────── */
@@ -115,21 +117,31 @@ h1, h2 { margin: 0; }
   display: grid;
   grid-template-columns: 420px 1fr;
   gap: 24px;
-  padding: 24px 28px 32px;
+  padding: 20px 28px 24px;
   max-width: 1600px;
   width: 100%; margin: 0 auto;
   align-items: stretch;
-  min-height: calc(100vh - 64px);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 @media (max-width: 1024px) {
-  .main { grid-template-columns: 1fr; }
+  .main { grid-template-columns: 1fr; overflow-y: auto; }
 }
 
 /* ─── Input column ───────────────────────────────────────────────────────── */
 .col-input {
-  display: flex; flex-direction: column; gap: 16px;
+  display: flex; flex-direction: column; gap: 14px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-2) transparent;
 }
+.col-input::-webkit-scrollbar { width: 6px; }
+.col-input::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: 3px; }
+.col-input::-webkit-scrollbar-track { background: transparent; }
 .col-input .lede { color: var(--ink-soft); font-size: 14px; margin: 0; }
 .col-input h1 {
   font-family: var(--font-display);
@@ -554,7 +566,7 @@ details.raw-resp pre {
 .dict-foot { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rule); }
 
 /* ─── Stage column ───────────────────────────────────────────────────────── */
-.col-stage { display: flex; flex-direction: column; min-width: 0; }
+.col-stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 .stage {
   flex: 1;
@@ -566,7 +578,7 @@ details.raw-resp pre {
   box-shadow: var(--shadow-md);
   position: relative; overflow: hidden;
   display: flex; flex-direction: column;
-  min-height: 600px;
+  min-height: 0;
 }
 .stage::before {
   content: '';
