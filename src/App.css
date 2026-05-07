@@ -386,8 +386,15 @@ h1, h2 { margin: 0; }
   box-shadow: var(--shadow-sm);
   padding: 16px 16px 14px;
   display: flex; flex-direction: column; gap: 12px;
-  position: relative; overflow: hidden;
+  position: relative;
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
 }
+.gloss-card::-webkit-scrollbar { width: 4px; }
+.gloss-card::-webkit-scrollbar-track { background: transparent; }
+.gloss-card::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 2px; }
 .gloss-card::before {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
   background: linear-gradient(90deg, var(--accent), var(--accent-strong));
@@ -890,9 +897,36 @@ details.raw-resp pre {
     padding: 20px 24px;
     margin-bottom: 80px; /* Space for fixed bottom bar */
     border-radius: 0;
+    max-height: calc(40vh - 80px);
+    overflow-y: auto;
   }
   .gloss-card::before { display: none; }
   .gloss-display { font-size: 24px; }
+
+  /* Raw HTTP debug — make actually usable on mobile.
+     - Force visible styling so the toggle is obvious
+     - Drop the nested 160px scroll; the parent gloss-card handles scrolling */
+  details.raw-resp {
+    width: 100%;
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-top: 4px;
+  }
+  details.raw-resp summary {
+    font-weight: 600;
+    color: var(--ink-2);
+    padding: 2px 0;
+  }
+  details.raw-resp[open] summary { margin-bottom: 6px; }
+  details.raw-resp pre {
+    max-height: none;
+    overflow: visible;
+    font-size: 10.5px;
+    padding: 8px 10px;
+    -webkit-overflow-scrolling: touch;
+  }
   
   /* Mobile Input Bar (Fixed Bottom) */
   .mobile-input-bar {

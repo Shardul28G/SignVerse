@@ -24,19 +24,25 @@ const VRM_URL = "./anim.vrm";
 const LLAMA_URL = "/api/llama/v1/chat/completions";
 
 const DICTIONARY = [
-  "Caution", "Fever", "Floor", "Name", "Please",
-  "Wet", "What", "You", "Your", "hospital",
+  "Caution", "Fever", "Floor", "Name","State", "Please","No","Go","Mumbai","Maharashtra","India","Population",
+  "Wet", "What", "You", "Your", "Take","Tonight","Dinner","After","One","Tablet","Capital","Large", "City",
 ];
 
 const SYSTEM_PROMPT =
   "You are an Indian Sign Language (ISL) gloss generator. " +
   "Convert the user's input into an ISL gloss line. " +
-  "ISL gloss is a sequence of uppercase keyword tokens in topic-comment order, " +
-  "with no articles, no auxiliary verbs, and no punctuation. " +
-  "You MUST always produce output. " +
-  "After any internal reasoning, your final output MUST be a single line containing ONLY the ISL gloss tokens — " +
-  "no quotes, no labels, no explanation, no extra text. " +
-  "If you are unsure, make your best attempt rather than returning nothing.";
+  "ISL gloss is a sequence of UPPERCASE keyword tokens in topic-comment order, " +
+  "with no articles, no auxiliary verbs, and no punctuation.\n\n" +
+  "STRICT OUTPUT RULES — these are not optional:\n" +
+  "1. You MUST always produce a non-empty visible answer. Returning empty content is a FAILURE.\n" +
+  "2. The visible answer MUST be exactly ONE LINE containing ONLY the gloss tokens — " +
+  "no quotes, no labels (no 'Answer:', 'Gloss:', etc.), no markdown, no bullets, no explanation.\n" +
+  "3. Every gloss token MUST be in UPPERCASE. Never use lowercase or mixed case.\n" +
+  "4. NEVER output the word HAVE in the gloss. Drop it. ISL gloss does not use 'have'.\n" +
+  "5. NEVER output articles (a, an, the) or auxiliary verbs (is, am, are, was, were, do, does, did, will, would, can, could, should, may, might).\n" +
+  "6. If you reason internally, keep the reasoning separate. The final visible response line is REQUIRED regardless of how much you reasoned.\n" +
+  "7. If you are unsure, make your best attempt rather than returning nothing.\n\n" +
+  "Example correct output:  TONIGHT DINNER AFTER TABLET ONE TAKE PLEASE";
 
 // ─── SVG icon helpers ─────────────────────────────────────────────────────────
 const Ico = ({ d, size = 14, fill = "none", sw = 2 }) => (
@@ -301,13 +307,26 @@ function lerpFrame(frameA, frameB, t) {
   };
 }
 
+// Words the model may use that have no ISL clip — mapped to a signed synonym.
+const GLOSS_SYNONYMS = {
+  high: "large",
+  highest: "large",
+  most: "large",
+};
+
+// Tokens to drop entirely from the gloss before matching — words ISL gloss
+// never uses (e.g. "have"). Even if the model emits them, we strip them.
+const GLOSS_DROP = new Set(["have", "be"]);
+
 // ─── Gloss → matched / skipped clip names ────────────────────────────────────
 function glossToClipNames(gloss) {
   const tokens = gloss
     .replace(/[^\w\s]/g, " ")
     .split(/\s+/)
     .filter(Boolean)
-    .map((t) => t.toLowerCase());
+    .map((t) => t.toLowerCase())
+    .filter((t) => !GLOSS_DROP.has(t))
+    .map((t) => GLOSS_SYNONYMS[t] ?? t);
 
   const dictLower = DICTIONARY.map((d) => ({
     name: d,
@@ -383,7 +402,7 @@ async function fetchGloss({ text, imageDataUrl, audioDataUrl }) {
     ];
   } else if (imageDataUrl) {
     userContent = [
-      { type: "text", text: text || "Describe this image, then convert to ISL gloss." },
+      { type: "text", text: text || "This is a photo of a public sign (e.g. hospital, transport, safety, informational). Read all text on the sign. Understand the core message or instruction it is communicating. Then output ONLY the ISL gloss tokens that convey that message — no description, no explanation, just the gloss line." },
       { type: "image_url", image_url: { url: imageDataUrl } },
     ];
   } else {
@@ -414,12 +433,64 @@ async function fetchGloss({ text, imageDataUrl, audioDataUrl }) {
   if (!resp.ok) {
     return { raw: "", cleaned: "", debug: respText, httpError: `HTTP ${resp.status}` };
   }
-  const raw = data?.choices?.[0]?.message?.content ?? "";
-  // Strip <think>…</think> reasoning blocks the model may emit
+  const message  = data?.choices?.[0]?.message ?? {};
+  const raw      = message.content ?? "";
+  // Some llama.cpp builds put thinking in a separate field instead of inline.
+  const reasoningField = message.reasoning_content ?? message.reasoning ?? "";
+
+  // Strip <think>…</think> reasoning blocks the model may emit inline
   const afterThinking = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-  const cleaned = afterThinking.replace(/^["'`]+|["'`]+$/g, "").replace(/[.!?]+$/, "").trim();
-  console.log("[Gemma] content:", raw, "→ after-think:", afterThinking, "→ cleaned:", cleaned);
-  return { raw: afterThinking, cleaned, debug: respText, httpError: null };
+  let cleaned = afterThinking.replace(/^["'`]+|["'`]+$/g, "").replace(/[.!?]+$/, "").trim();
+
+  // Fallback: model returned empty / non-gloss content but the answer is in
+  // its reasoning. Sources, in order:
+  //   1. message.reasoning_content (separate API field)
+  //   2. <think>…</think> inside content
+  if (!cleaned) {
+    const inlineThink = raw.match(/<think>([\s\S]*?)<\/think>/i)?.[1] ?? "";
+    const reasoningText = reasoningField || inlineThink;
+    if (reasoningText) {
+      const recovered = extractGlossFromReasoning(reasoningText);
+      if (recovered) {
+        console.log("[Gemma] recovered gloss from reasoning:", recovered);
+        cleaned = recovered;
+      }
+    }
+  }
+
+  console.log(
+    "[Gemma] content:", raw,
+    "→ reasoning_content len:", reasoningField.length,
+    "→ after-think:", afterThinking,
+    "→ cleaned:", cleaned,
+  );
+  return { raw: afterThinking || cleaned, cleaned, debug: respText, httpError: null };
+}
+
+// Extract an ISL gloss from a reasoning block. The gloss is generally the
+// LAST line, so we walk lines bottom-up; for each line we scan tokens
+// right-to-left and keep the trailing run of consecutive ALL-CAPS word
+// tokens. This handles things like:
+//   "So the final answer is: TONIGHT DINNER AFTER TABLET ONE TAKE PLEASE"
+//   "Final: **TONIGHT DINNER AFTER TABLET ONE TAKE PLEASE**"
+//   plain "TONIGHT DINNER AFTER TABLET ONE TAKE PLEASE"
+function extractGlossFromReasoning(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (let li = lines.length - 1; li >= 0; li--) {
+    const tokens = lines[li].split(/\s+/).filter(Boolean);
+    const out = [];
+    for (let ti = tokens.length - 1; ti >= 0; ti--) {
+      // Strip surrounding punctuation/markdown (*, **, ", ', :, etc.)
+      const t = tokens[ti].replace(/^[^\w]+|[^\w]+$/g, "");
+      if (/^[A-Z][A-Z_]+$/.test(t)) {
+        out.unshift(t);
+      } else if (out.length > 0) {
+        break; // run ended on this line
+      }
+    }
+    if (out.length >= 1) return out.join(" ");
+  }
+  return "";
 }
 
 // ─── WAV encoder (PCM Float32 → 16-bit WAV ArrayBuffer) ──────────────────────
@@ -520,7 +591,7 @@ function Topbar({ status }) {
           />
           {modelOnline ? "Model online" : "Model offline"}
         </button>
-        <button className="pill-btn">EN-IN → ISL</button>
+
         <button className="pill-btn" aria-label="Settings">
           <SettingsIcon />
           Settings
@@ -534,7 +605,7 @@ function Topbar({ status }) {
 function InputPanel({
   onPlay, onRetry, onDictPreview,
   status, matched, skipped, activeWordIdx,
-  error, modelDebug, hasSubmitted,
+  gloss, error, modelDebug, hasSubmitted,
 }) {
   const [mode, setMode] = useState("text");
   const [text, setText] = useState("");
@@ -904,12 +975,23 @@ function InputPanel({
 
         {/* Error state */}
         <div className="gloss-state state-error">
+          {gloss && (
+            <div className="gloss-display" style={{ marginBottom: 2 }}>
+              {gloss.toUpperCase()}
+            </div>
+          )}
           <div className="error-row">
             <span className="error-icon">!</span>
             <div>
-              <div className="error-title">Model returned no usable gloss</div>
+              <div className="error-title">
+                {error === "no_dict_match"
+                  ? "No words matched the dictionary"
+                  : "Model returned no usable gloss"}
+              </div>
               <div className="error-sub">
-                {error
+                {error === "no_dict_match"
+                  ? "The model produced the gloss above but none of the words are in the dictionary. "
+                  : error
                   ? error.replace(/\.$/, "") + ". "
                   : "None of the words matched the dictionary. "}
                 Avatar is signing <b>PROBLEM</b>. Try a phrase using the available words below.
@@ -1069,14 +1151,20 @@ export default function App() {
       }
     };
 
+    let debugText = "";
     try {
       const { cleaned, debug, httpError } = await llmPromise;
       const glossText = cleaned;
-      const debugText = debug || "";
+      debugText = debug || "";
+      // Surface the raw HTTP response immediately so it's available for
+      // debugging even if we throw below (httpError, no-match, clip load).
+      setModelDebug(debugText);
       if (httpError) throw new Error(`llama.cpp ${httpError}`);
+      // Always store the raw gloss so it's visible in the error state too.
+      setGloss(glossText);
       const { matched: m, skipped: s } = glossToClipNames(glossText);
       if (m.length === 0) {
-        throw new Error(`No words matched. Available: ${DICTIONARY.join(", ")}`);
+        throw new Error("no_dict_match");
       }
       const { frames: newFrames, wordRanges: newRanges } = await loadClipFrames(m);
 
@@ -1084,7 +1172,6 @@ export default function App() {
       await ensureMinPlay();
 
       setGloss(glossText);
-      setModelDebug(debugText);
       setMatched(m);
       setSkipped(s);
       setActiveWordIdx(-1);
@@ -1105,6 +1192,7 @@ export default function App() {
       await ensureMinPlay();
 
       setError(errorMsg);
+      if (debugText) setModelDebug(debugText);
       setStatus("idle");
       if (errF) {
         setFrames(errF);
@@ -1170,6 +1258,7 @@ export default function App() {
             matched={matched}
             skipped={skipped}
             activeWordIdx={activeWordIdx}
+            gloss={gloss}
             error={error}
             modelDebug={modelDebug}
             hasSubmitted={hasSubmitted}
