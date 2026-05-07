@@ -21,7 +21,7 @@ import "./App.css";
 const FPS = 25;
 const FRAME_TIME = 1 / FPS;
 const VRM_URL = "./anim.vrm";
-const LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions";
+const LLAMA_URL = "/api/llama/v1/chat/completions";
 
 const DICTIONARY = [
   "Caution", "Fever", "Floor", "Name", "Please",
@@ -650,13 +650,13 @@ function InputPanel({
 
   return (
     <section className="col-input">
-      <h1>What should they <em>sign</em>?</h1>
-      <p className="lede" style={{ marginTop: -4 }}>
+      <h1 className="desktop-only">What should they <em>sign</em>?</h1>
+      <p className="lede desktop-only" style={{ marginTop: -4 }}>
         Type, speak, or drop an image — we'll convert it into ISL gloss and play it on the avatar.
       </p>
 
       {/* Mode tabs */}
-      <div className="mode-tabs" role="tablist">
+      <div className="mode-tabs desktop-only" role="tablist">
         {[
           { id: "text",  label: "Text",  icon: <TextIcon /> },
           { id: "voice", label: "Voice", icon: <MicIcon /> },
@@ -676,6 +676,7 @@ function InputPanel({
       </div>
 
       {/* Input card */}
+      <div className="desktop-only">
       <div className="input-card">
         <div className="body">
           {mode === "text" && (
@@ -784,6 +785,63 @@ function InputPanel({
           </>
         )}
       </button>
+      </div>
+
+      {/* Mobile Input Bar */}
+      <div className="mobile-input-bar mobile-only">
+        <button
+          className="icon-btn plus-btn"
+          onClick={() => document.getElementById("mobileFileInp").click()}
+          aria-label="Upload image"
+          disabled={busy}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <input
+          type="file"
+          id="mobileFileInp"
+          accept="image/*"
+          className="sr-only"
+          onChange={(e) => handleImageFile(e.target.files?.[0] ?? null)}
+        />
+
+        <div className="mobile-input-wrapper">
+          {(imageFile || audioUrl) && (
+             <div className="mobile-preview-badge">
+               {imageFile ? "Image attached" : "Audio attached"}
+               <button onClick={clearInput} className="clear-badge" aria-label="Clear">×</button>
+             </div>
+          )}
+          <input
+            className="mobile-input"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={recording ? "Listening..." : "Type, speak, or image..."}
+            disabled={busy || recording}
+          />
+        </div>
+
+        <button
+          className={`icon-btn mic-btn ${recording ? "rec" : ""}`}
+          onClick={recording ? stopRecording : startRecording}
+          disabled={busy}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <path d="M12 19v3" />
+          </svg>
+        </button>
+
+        <button
+          className="mobile-cta"
+          onClick={submit}
+          disabled={busy || (!text.trim() && !imageFile && !audioDataUrl)}
+        >
+          Sign it
+        </button>
+      </div>
 
       {/* Gloss output card */}
       <div className="gloss-card" data-state={glossCardState}>
