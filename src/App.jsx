@@ -21,19 +21,28 @@ import "./App.css";
 const FPS = 25;
 const FRAME_TIME = 1 / FPS;
 const VRM_URL = "./anim.vrm";
-const LLAMA_URL = "http://127.0.0.1:8080/v1/chat/completions";
+const LLAMA_URL = "/api/llama/v1/chat/completions";
 
 const DICTIONARY = [
-  "Caution", "Fever", "Floor", "Name", "Please",
-  "Wet", "What", "You", "Your", "hospital",
+  "Caution", "Fever", "Floor", "Name","State", "Please","No","Go","Mumbai","Maharashtra","India","Population",
+  "Wet", "What", "You", "Your", "Take","Tonight","Dinner","After","One","Tablet","Capital","Large", "City",
 ];
 
 const SYSTEM_PROMPT =
   "You are an Indian Sign Language (ISL) gloss generator. " +
   "Convert the user's input into an ISL gloss line. " +
-  "ISL gloss is a sequence of uppercase keyword tokens in topic-comment order, " +
-  "with no articles, no auxiliary verbs, and no punctuation. " +
-  "Reply with ONLY the gloss line — no quotes, no explanation, no extra text.";
+  "ISL gloss is a sequence of UPPERCASE keyword tokens in topic-comment order, " +
+  "with no articles, no auxiliary verbs, and no punctuation.\n\n" +
+  "STRICT OUTPUT RULES — these are not optional:\n" +
+  "1. You MUST always produce a non-empty visible answer. Returning empty content is a FAILURE.\n" +
+  "2. The visible answer MUST be exactly ONE LINE containing ONLY the gloss tokens — " +
+  "no quotes, no labels (no 'Answer:', 'Gloss:', etc.), no markdown, no bullets, no explanation.\n" +
+  "3. Every gloss token MUST be in UPPERCASE. Never use lowercase or mixed case.\n" +
+  "4. NEVER output the word HAVE in the gloss. Drop it. ISL gloss does not use 'have'.\n" +
+  "5. NEVER output articles (a, an, the) or auxiliary verbs (is, am, are, was, were, do, does, did, will, would, can, could, should, may, might).\n" +
+  "6. If you reason internally, keep the reasoning separate. The final visible response line is REQUIRED regardless of how much you reasoned.\n" +
+  "7. If you are unsure, make your best attempt rather than returning nothing.\n\n" +
+  "Example correct output:  TONIGHT DINNER AFTER TABLET ONE TAKE PLEASE";
 
 // ─── SVG icon helpers ─────────────────────────────────────────────────────────
 const Ico = ({ d, size = 14, fill = "none", sw = 2 }) => (
@@ -298,13 +307,26 @@ function lerpFrame(frameA, frameB, t) {
   };
 }
 
+// Words the model may use that have no ISL clip — mapped to a signed synonym.
+const GLOSS_SYNONYMS = {
+  high: "large",
+  highest: "large",
+  most: "large",
+};
+
+// Tokens to drop entirely from the gloss before matching — words ISL gloss
+// never uses (e.g. "have"). Even if the model emits them, we strip them.
+const GLOSS_DROP = new Set(["have", "be"]);
+
 // ─── Gloss → matched / skipped clip names ────────────────────────────────────
 function glossToClipNames(gloss) {
   const tokens = gloss
     .replace(/[^\w\s]/g, " ")
     .split(/\s+/)
     .filter(Boolean)
-    .map((t) => t.toLowerCase());
+    .map((t) => t.toLowerCase())
+    .filter((t) => !GLOSS_DROP.has(t))
+    .map((t) => GLOSS_SYNONYMS[t] ?? t);
 
   const dictLower = DICTIONARY.map((d) => ({
     name: d,
@@ -369,13 +391,23 @@ async function loadClipFrames(clipNames) {
 }
 
 // ─── LLM call ─────────────────────────────────────────────────────────────────
-async function fetchGloss({ text, imageDataUrl }) {
-  const userContent = imageDataUrl
-    ? [
-        { type: "text", text: text || "Describe this image, then convert to ISL gloss." },
-        { type: "image_url", image_url: { url: imageDataUrl } },
-      ]
-    : text;
+async function fetchGloss({ text, imageDataUrl, audioDataUrl }) {
+  let userContent;
+  if (audioDataUrl) {
+    // Strip data-URL prefix → raw base64 for input_audio (Gemma 4 E2B audio conformer)
+    const base64 = audioDataUrl.split(",")[1];
+    userContent = [
+      { type: "text", text: "Listen to this audio and convert the speech to ISL gloss." },
+      { type: "input_audio", input_audio: { data: base64, format: "wav" } },
+    ];
+  } else if (imageDataUrl) {
+    userContent = [
+      { type: "text", text: text || "This is a photo of a public sign (e.g. hospital, transport, safety, informational). Read all text on the sign. Understand the core message or instruction it is communicating. Then output ONLY the ISL gloss tokens that convey that message — no description, no explanation, just the gloss line." },
+      { type: "image_url", image_url: { url: imageDataUrl } },
+    ];
+  } else {
+    userContent = text;
+  }
 
   const body = {
     model: "gemma",
@@ -388,31 +420,96 @@ async function fetchGloss({ text, imageDataUrl }) {
     stream: false,
   };
 
+  console.log("[Gemma] → request body:", JSON.stringify(body, null, 2));
   const resp = await fetch(LLAMA_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   const respText = await resp.text();
+  console.log("[Gemma] ← HTTP", resp.status, "raw response:\n", respText);
   let data = null;
   try { data = JSON.parse(respText); } catch { /* leave as raw text */ }
   if (!resp.ok) {
     return { raw: "", cleaned: "", debug: respText, httpError: `HTTP ${resp.status}` };
   }
-  const raw = data?.choices?.[0]?.message?.content ?? "";
-  const cleaned = raw.trim().replace(/^["'`]+|["'`]+$/g, "").replace(/[.!?]+$/, "").trim();
-  return { raw, cleaned, debug: respText, httpError: null };
+  const message  = data?.choices?.[0]?.message ?? {};
+  const raw      = message.content ?? "";
+  // Some llama.cpp builds put thinking in a separate field instead of inline.
+  const reasoningField = message.reasoning_content ?? message.reasoning ?? "";
+
+  // Strip <think>…</think> reasoning blocks the model may emit inline
+  const afterThinking = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  let cleaned = afterThinking.replace(/^["'`]+|["'`]+$/g, "").replace(/[.!?]+$/, "").trim();
+
+  // Fallback: model returned empty / non-gloss content but the answer is in
+  // its reasoning. Sources, in order:
+  //   1. message.reasoning_content (separate API field)
+  //   2. <think>…</think> inside content
+  if (!cleaned) {
+    const inlineThink = raw.match(/<think>([\s\S]*?)<\/think>/i)?.[1] ?? "";
+    const reasoningText = reasoningField || inlineThink;
+    if (reasoningText) {
+      const recovered = extractGlossFromReasoning(reasoningText);
+      if (recovered) {
+        console.log("[Gemma] recovered gloss from reasoning:", recovered);
+        cleaned = recovered;
+      }
+    }
+  }
+
+  console.log(
+    "[Gemma] content:", raw,
+    "→ reasoning_content len:", reasoningField.length,
+    "→ after-think:", afterThinking,
+    "→ cleaned:", cleaned,
+  );
+  return { raw: afterThinking || cleaned, cleaned, debug: respText, httpError: null };
 }
 
-// ─── Browser speech recognition ───────────────────────────────────────────────
-function getSpeechRecognition() {
-  const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Ctor) return null;
-  const rec = new Ctor();
-  rec.continuous = false;
-  rec.interimResults = false;
-  rec.lang = "en-IN";
-  return rec;
+// Extract an ISL gloss from a reasoning block. The gloss is generally the
+// LAST line, so we walk lines bottom-up; for each line we scan tokens
+// right-to-left and keep the trailing run of consecutive ALL-CAPS word
+// tokens. This handles things like:
+//   "So the final answer is: TONIGHT DINNER AFTER TABLET ONE TAKE PLEASE"
+//   "Final: **TONIGHT DINNER AFTER TABLET ONE TAKE PLEASE**"
+//   plain "TONIGHT DINNER AFTER TABLET ONE TAKE PLEASE"
+function extractGlossFromReasoning(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (let li = lines.length - 1; li >= 0; li--) {
+    const tokens = lines[li].split(/\s+/).filter(Boolean);
+    const out = [];
+    for (let ti = tokens.length - 1; ti >= 0; ti--) {
+      // Strip surrounding punctuation/markdown (*, **, ", ', :, etc.)
+      const t = tokens[ti].replace(/^[^\w]+|[^\w]+$/g, "");
+      if (/^[A-Z][A-Z_]+$/.test(t)) {
+        out.unshift(t);
+      } else if (out.length > 0) {
+        break; // run ended on this line
+      }
+    }
+    if (out.length >= 1) return out.join(" ");
+  }
+  return "";
+}
+
+// ─── WAV encoder (PCM Float32 → 16-bit WAV ArrayBuffer) ──────────────────────
+function encodeWav(samples, sampleRate) {
+  const dataSize = samples.length * 2;
+  const buf = new ArrayBuffer(44 + dataSize);
+  const v = new DataView(buf);
+  const ws = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  ws(0, "RIFF"); v.setUint32(4, 36 + dataSize, true);
+  ws(8, "WAVE"); ws(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true); ws(36, "data"); v.setUint32(40, dataSize, true);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return buf;
 }
 
 function fileToDataURL(file) {
@@ -422,6 +519,56 @@ function fileToDataURL(file) {
     r.onerror = reject;
     r.readAsDataURL(file);
   });
+}
+
+// ─── Custom audio player ─────────────────────────────────────────────────────
+function AudioPlayer({ src }) {
+  const audioRef = useRef(null);
+  const [playing, setPlaying] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    playing ? a.pause() : a.play();
+    setPlaying(!playing);
+  };
+
+  const fmt = (s) =>
+    `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+
+  const progress = duration ? current / duration : 0;
+
+  return (
+    <div className="audio-player">
+      <audio
+        ref={audioRef}
+        src={src}
+        onTimeUpdate={(e) => setCurrent(e.target.currentTime)}
+        onDurationChange={(e) => setDuration(e.target.duration)}
+        onEnded={() => { setPlaying(false); setCurrent(0); }}
+      />
+      <button className="ap-btn" onClick={toggle} aria-label={playing ? "Pause" : "Play"}>
+        {playing ? <PauseIcon size={16} /> : <PlayIcon size={16} />}
+      </button>
+      <div className="ap-track">
+        <div className="ap-bar-wrap">
+          <div className="ap-bar-fill" style={{ width: `${progress * 100}%` }} />
+          <input
+            type="range" min={0} max={duration || 1} step={0.01} value={current}
+            className="ap-scrubber"
+            onChange={(e) => {
+              const t = +e.target.value;
+              audioRef.current.currentTime = t;
+              setCurrent(t);
+            }}
+          />
+        </div>
+        <div className="ap-time">{fmt(current)} / {fmt(duration)}</div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Topbar ───────────────────────────────────────────────────────────────────
@@ -444,7 +591,7 @@ function Topbar({ status }) {
           />
           {modelOnline ? "Model online" : "Model offline"}
         </button>
-        <button className="pill-btn">EN-IN → ISL</button>
+
         <button className="pill-btn" aria-label="Settings">
           <SettingsIcon />
           Settings
@@ -458,7 +605,7 @@ function Topbar({ status }) {
 function InputPanel({
   onPlay, onRetry, onDictPreview,
   status, matched, skipped, activeWordIdx,
-  error, modelDebug, hasSubmitted,
+  gloss, error, modelDebug, hasSubmitted,
 }) {
   const [mode, setMode] = useState("text");
   const [text, setText] = useState("");
@@ -466,7 +613,10 @@ function InputPanel({
   const [imagePreview, setImagePreview] = useState(null);
   const [recording, setRecording] = useState(false);
   const [dictOpen, setDictOpen] = useState(false);
-  const recRef = useRef(null);
+  const [audioUrl, setAudioUrl] = useState(null);       // object URL for <audio> preview
+  const [audioDataUrl, setAudioDataUrl] = useState(null); // base64 data URL for API
+  const audioNodesRef = useRef(null); // { ctx, source, processor, stream }
+  const samplesRef = useRef([]);
 
   const busy = status === "loading";
 
@@ -483,33 +633,59 @@ function InputPanel({
   })();
 
   const submit = async () => {
-    if (!text.trim() && !imageFile) return;
+    if (!text.trim() && !imageFile && !audioDataUrl) return;
     let imageDataUrl = null;
     if (imageFile) imageDataUrl = await fileToDataURL(imageFile);
-    onPlay({ text: text.trim(), imageDataUrl });
+    onPlay({ text: text.trim(), imageDataUrl, audioDataUrl });
   };
 
-  const startRecording = () => {
-    const rec = getSpeechRecognition();
-    if (!rec) {
-      alert("SpeechRecognition not supported in this browser. Try Chrome.");
-      return;
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctx = new AudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+      // ScriptProcessorNode collects raw PCM float32 samples
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      samplesRef.current = [];
+      processor.onaudioprocess = (e) => {
+        samplesRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      source.connect(processor);
+      processor.connect(ctx.destination);
+      audioNodesRef.current = { ctx, source, processor, stream };
+      setRecording(true);
+      // Clear any prior recording
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      setAudioUrl(null);
+      setAudioDataUrl(null);
+    } catch {
+      alert("Microphone access denied. Please allow microphone access in your browser.");
     }
-    recRef.current = rec;
-    setRecording(true);
-    rec.onresult = (e) => {
-      const transcript = e.results[0][0].transcript;
-      setText((prev) => (prev ? `${prev} ${transcript}` : transcript));
-      setMode("text");
-    };
-    rec.onend = () => setRecording(false);
-    rec.onerror = () => setRecording(false);
-    rec.start();
   };
 
-  const stopRecording = () => {
-    recRef.current?.stop();
+  const stopRecording = async () => {
+    const nodes = audioNodesRef.current;
+    if (!nodes) return;
+    const { ctx, source, processor, stream } = nodes;
+    source.disconnect();
+    processor.disconnect();
+    stream.getTracks().forEach((t) => t.stop());
+    const sampleRate = ctx.sampleRate;
+    await ctx.close();
+    audioNodesRef.current = null;
     setRecording(false);
+
+    // Merge all PCM chunks and encode as WAV
+    const total = samplesRef.current.reduce((n, c) => n + c.length, 0);
+    const merged = new Float32Array(total);
+    let off = 0;
+    for (const chunk of samplesRef.current) { merged.set(chunk, off); off += chunk.length; }
+    const wavBuf = encodeWav(merged, sampleRate);
+    const blob = new Blob([wavBuf], { type: "audio/wav" });
+    const objUrl = URL.createObjectURL(blob);
+    setAudioUrl(objUrl);
+    const dataUrl = await fileToDataURL(blob);
+    setAudioDataUrl(dataUrl);
   };
 
   const handleImageFile = async (file) => {
@@ -523,22 +699,35 @@ function InputPanel({
     setText("");
     setImageFile(null);
     setImagePreview(null);
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    setAudioUrl(null);
+    setAudioDataUrl(null);
   };
 
   const handleKeyDown = (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
   };
 
+  // Paste image from clipboard (Ctrl+V / Cmd+V) when in image mode
+  useEffect(() => {
+    const onPaste = (e) => {
+      if (mode !== "image") return;
+      const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
+      if (item) handleImageFile(item.getAsFile());
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [mode]);
+
   return (
     <section className="col-input">
-      <p className="lede">Step 1 of 2</p>
-      <h1>What should they <em>sign</em>?</h1>
-      <p className="lede" style={{ marginTop: -4 }}>
+      <h1 className="desktop-only">What should they <em>sign</em>?</h1>
+      <p className="lede desktop-only" style={{ marginTop: -4 }}>
         Type, speak, or drop an image — we'll convert it into ISL gloss and play it on the avatar.
       </p>
 
       {/* Mode tabs */}
-      <div className="mode-tabs" role="tablist">
+      <div className="mode-tabs desktop-only" role="tablist">
         {[
           { id: "text",  label: "Text",  icon: <TextIcon /> },
           { id: "voice", label: "Voice", icon: <MicIcon /> },
@@ -558,6 +747,7 @@ function InputPanel({
       </div>
 
       {/* Input card */}
+      <div className="desktop-only">
       <div className="input-card">
         <div className="body">
           {mode === "text" && (
@@ -578,28 +768,31 @@ function InputPanel({
                 className={`voice-btn${recording ? " rec" : ""}`}
                 onClick={recording ? stopRecording : startRecording}
                 disabled={busy}
-                aria-label={recording ? "Stop recording" : "Record"}
+                aria-label={recording ? "Stop recording" : audioUrl ? "Re-record" : "Start recording"}
               >
                 <MicIcon size={32} />
               </button>
               <div className="voice-hint">
                 {recording
                   ? "Listening… tap again to stop"
-                  : "Tap to record · we'll transcribe and translate"}
+                  : audioUrl
+                  ? "Audio captured · tap Sign it below, or re-record"
+                  : "Tap to record · raw audio sent directly to Gemma 4"}
               </div>
               {recording && (
                 <div className="voice-wave">
                   {[...Array(6)].map((_, i) => <span key={i} />)}
                 </div>
               )}
+              {!recording && audioUrl && <AudioPlayer src={audioUrl} />}
             </div>
           )}
 
           {mode === "image" && !imageFile && (
             <label className="image-drop" htmlFor="fileInp">
               <div className="ico"><UploadIcon /></div>
-              <div className="t">Drop an image or click to upload</div>
-              <div className="s">JPG, PNG, WebP · Multimodal model will describe + translate</div>
+              <div className="t">Drop, paste, or click to upload</div>
+              <div className="s">JPG, PNG, WebP · or Ctrl+V to paste from clipboard</div>
               <input
                 type="file"
                 id="fileInp"
@@ -651,7 +844,7 @@ function InputPanel({
       <button
         className={`cta${busy ? " loading" : ""}`}
         onClick={submit}
-        disabled={busy || (!text.trim() && !imageFile)}
+        disabled={busy || (!text.trim() && !imageFile && !audioDataUrl)}
       >
         {busy ? (
           <><span className="spin" />Translating with Gemma…</>
@@ -663,6 +856,63 @@ function InputPanel({
           </>
         )}
       </button>
+      </div>
+
+      {/* Mobile Input Bar */}
+      <div className="mobile-input-bar mobile-only">
+        <button
+          className="icon-btn plus-btn"
+          onClick={() => document.getElementById("mobileFileInp").click()}
+          aria-label="Upload image"
+          disabled={busy}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <input
+          type="file"
+          id="mobileFileInp"
+          accept="image/*"
+          className="sr-only"
+          onChange={(e) => handleImageFile(e.target.files?.[0] ?? null)}
+        />
+
+        <div className="mobile-input-wrapper">
+          {(imageFile || audioUrl) && (
+             <div className="mobile-preview-badge">
+               {imageFile ? "Image attached" : "Audio attached"}
+               <button onClick={clearInput} className="clear-badge" aria-label="Clear">×</button>
+             </div>
+          )}
+          <input
+            className="mobile-input"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={recording ? "Listening..." : "Type, speak, or image..."}
+            disabled={busy || recording}
+          />
+        </div>
+
+        <button
+          className={`icon-btn mic-btn ${recording ? "rec" : ""}`}
+          onClick={recording ? stopRecording : startRecording}
+          disabled={busy}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <path d="M12 19v3" />
+          </svg>
+        </button>
+
+        <button
+          className="mobile-cta"
+          onClick={submit}
+          disabled={busy || (!text.trim() && !imageFile && !audioDataUrl)}
+        >
+          Sign it
+        </button>
+      </div>
 
       {/* Gloss output card */}
       <div className="gloss-card" data-state={glossCardState}>
@@ -725,12 +975,23 @@ function InputPanel({
 
         {/* Error state */}
         <div className="gloss-state state-error">
+          {gloss && (
+            <div className="gloss-display" style={{ marginBottom: 2 }}>
+              {gloss.toUpperCase()}
+            </div>
+          )}
           <div className="error-row">
             <span className="error-icon">!</span>
             <div>
-              <div className="error-title">Model returned no usable gloss</div>
+              <div className="error-title">
+                {error === "no_dict_match"
+                  ? "No words matched the dictionary"
+                  : "Model returned no usable gloss"}
+              </div>
               <div className="error-sub">
-                {error
+                {error === "no_dict_match"
+                  ? "The model produced the gloss above but none of the words are in the dictionary. "
+                  : error
                   ? error.replace(/\.$/, "") + ". "
                   : "None of the words matched the dictionary. "}
                 Avatar is signing <b>PROBLEM</b>. Try a phrase using the available words below.
@@ -851,8 +1112,8 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const handlePlay = useCallback(async ({ text, imageDataUrl }) => {
-    lastSubmitRef.current = { text, imageDataUrl };
+  const handlePlay = useCallback(async ({ text, imageDataUrl, audioDataUrl }) => {
+    lastSubmitRef.current = { text, imageDataUrl, audioDataUrl };
     setStatus("loading");
     setError(null);
     setGloss("");
@@ -864,7 +1125,7 @@ export default function App() {
     setIsPlaying(true);
 
     // ── Start the LLM call IMMEDIATELY (parallel with clip loading) ────────
-    const llmPromise = fetchGloss({ text, imageDataUrl });
+    const llmPromise = fetchGloss({ text, imageDataUrl, audioDataUrl });
 
     // ── Load and show Please → Wait while the model thinks ─────────────────
     let waitStartTime = 0;
@@ -890,14 +1151,20 @@ export default function App() {
       }
     };
 
+    let debugText = "";
     try {
       const { cleaned, debug, httpError } = await llmPromise;
       const glossText = cleaned;
-      const debugText = debug || "";
+      debugText = debug || "";
+      // Surface the raw HTTP response immediately so it's available for
+      // debugging even if we throw below (httpError, no-match, clip load).
+      setModelDebug(debugText);
       if (httpError) throw new Error(`llama.cpp ${httpError}`);
+      // Always store the raw gloss so it's visible in the error state too.
+      setGloss(glossText);
       const { matched: m, skipped: s } = glossToClipNames(glossText);
       if (m.length === 0) {
-        throw new Error(`No words matched. Available: ${DICTIONARY.join(", ")}`);
+        throw new Error("no_dict_match");
       }
       const { frames: newFrames, wordRanges: newRanges } = await loadClipFrames(m);
 
@@ -905,7 +1172,6 @@ export default function App() {
       await ensureMinPlay();
 
       setGloss(glossText);
-      setModelDebug(debugText);
       setMatched(m);
       setSkipped(s);
       setActiveWordIdx(-1);
@@ -926,6 +1192,7 @@ export default function App() {
       await ensureMinPlay();
 
       setError(errorMsg);
+      if (debugText) setModelDebug(debugText);
       setStatus("idle");
       if (errF) {
         setFrames(errF);
@@ -939,7 +1206,7 @@ export default function App() {
 
   const handleRetry = useCallback(() => {
     const last = lastSubmitRef.current;
-    if (last.text || last.imageDataUrl) handlePlay(last);
+    if (last.text || last.imageDataUrl || last.audioDataUrl) handlePlay(last);
   }, [handlePlay]);
 
   const handleDictPreview = useCallback(async (word) => {
@@ -991,6 +1258,7 @@ export default function App() {
             matched={matched}
             skipped={skipped}
             activeWordIdx={activeWordIdx}
+            gloss={gloss}
             error={error}
             modelDebug={modelDebug}
             hasSubmitted={hasSubmitted}
