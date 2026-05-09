@@ -462,7 +462,7 @@ async function fetchGloss({ text, imageDataUrl, audioDataUrl }) {
         type: "text",
         text:
           GLOSS_INSTRUCTIONS +
-          "\n\nInput: the image above. Inside <think>, describe what the image actually communicates " +
+          "\n\nInput: the image above of a public sign. Inside <think>, describe what the image actually communicates " +
           "(the message, not 'a photo of…'), then produce the gloss line." +
           (text ? `\nUser hint: ${text}` : ""),
       },

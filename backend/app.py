@@ -101,7 +101,7 @@ image = (
 MODELS_DIR = "/models"
 models_vol = modal.Volume.from_name("isl-models", create_if_missing=True)
 
-BASE_GGUF = f"{MODELS_DIR}/base.gguf"
+BASE_GGUF = f"{MODELS_DIR}/base_f16.gguf"
 LORA_GGUF = f"{MODELS_DIR}/lora.gguf"
 MMPROJ_GGUF = f"{MODELS_DIR}/mmproj.gguf"
 
@@ -115,7 +115,7 @@ app = modal.App("isl-llama-server")
     # f16 9 GB base + mmproj + KV cache spills on T4 (16 GB). L4 has 24 GB
     # and is the same Modal price tier — switch back to "T4" only if you
     # later swap to a Q8_0/Q5 quant of the base.
-    gpu="T4",
+    gpu="L4",
     volumes={MODELS_DIR: models_vol},
     timeout=60 * 60,
     scaledown_window=300,   # keep warm 5 min after last request
