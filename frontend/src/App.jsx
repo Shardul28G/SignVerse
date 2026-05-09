@@ -45,9 +45,22 @@ function landmarkUrl(name) {
   return `${LANDMARKS_BASE_URL}/${name}.json`;
 }
 
+// Sourced from data_tools/landmarks/*.json — every entry here has a matching
+// landmark JSON either bundled (frontend/public/landmarks/) or on R2.
 const DICTIONARY = [
-  "Caution", "Fever", "Floor", "Name","State", "Please","No","Go","Mumbai","Maharashtra","India","Population",
-  "Wet", "What", "You", "Your", "Take","Tonight","Dinner","After","One","Tablet","Capital","Large", "City",
+  "After", "Age", "All", "Bad", "Beautiful", "Below", "Big", "Book", "Boy",
+  "Capital", "Caution", "Child", "City", "Cold", "Come", "Country", "Deaf",
+  "Dinner", "Doctor", "Drink", "Eat", "Evening", "Family", "Far", "Fast",
+  "Father", "Fever", "Floor", "Food", "Girl", "Give", "Go", "Good", "Happy",
+  "He", "Hello", "Help", "Here", "Hospital", "Hot", "Hungry", "India", "Know",
+  "Language", "Large", "Learn", "Like", "Maharashtra", "Make", "Man", "More",
+  "Morning", "Mother", "Mumbai", "Name", "New", "Night", "No", "One", "Play",
+  "Please", "Population", "Problem", "Read", "Ready", "Remember", "Right",
+  "Run", "Sad", "School", "See", "She", "Sick", "Sign", "Sister", "Slow",
+  "Small", "Sorry", "State", "Stop", "Tablet", "Take", "Teach", "Teacher",
+  "There", "They", "Thirsty", "Time", "Today", "Tomorrow", "Tonight", "Very",
+  "Walk", "Water", "We", "Wet", "What", "Where", "Why", "Year", "Yes",
+  "Yesterday", "You", "Your",
 ];
 
 // Shared instruction block. We deliver this in the USER turn (not the system
