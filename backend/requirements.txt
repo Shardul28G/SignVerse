@@ -1,0 +1,4 @@
+# Local dev only -- you only need `modal` on your laptop to deploy.
+# All inference dependencies (llama-cpp-python, fastapi, uvicorn, huggingface-hub)
+# are baked into the Modal image inside app.py and are NOT installed locally.
+modal>=0.66

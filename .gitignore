@@ -1,4 +1,4 @@
-# Logs
+# ─── Logs ──────────────────────────────────────────────────────────────────
 logs
 *.log
 npm-debug.log*
@@ -7,12 +7,14 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# ─── Node / Vite build output ──────────────────────────────────────────────
 node_modules
 dist
 dist-ssr
 *.local
 
-# Editor directories and files
+
+# ─── Editor / OS ───────────────────────────────────────────────────────────
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -22,3 +24,27 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ─── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ─── Secrets ───────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+.claude
+
+# ─── Large data: landmarks live in Cloudflare R2, not git ──────────────────
+# The 4 always-bundled fallbacks under frontend/public/landmarks/ ARE tracked.
+data_tools/landmarks/*.json
+
+# ─── Large model artifacts: live in a Modal Volume, not git ────────────────
+backend/*.gguf
+backend/*.bin
+backend/*.safetensors
+*.gguf
