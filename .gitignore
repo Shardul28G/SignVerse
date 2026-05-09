@@ -13,6 +13,7 @@ dist
 dist-ssr
 *.local
 
+
 # ─── Editor / OS ───────────────────────────────────────────────────────────
 .vscode/*
 !.vscode/extensions.json
@@ -35,6 +36,8 @@ venv/
 .env
 .env.*
 !.env.example
+
+.claude
 
 # ─── Large data: landmarks live in Cloudflare R2, not git ──────────────────
 # The 4 always-bundled fallbacks under frontend/public/landmarks/ ARE tracked.
