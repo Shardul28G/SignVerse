@@ -1,10 +1,17 @@
 """
-Modal deployment of an OpenAI-compatible llama.cpp server on a T4 GPU.
+Modal deployment of the upstream llama.cpp `llama-server` binary on a GPU.
 
-It serves a base .gguf model with a LoRA adapter and a vision projector
-(mmproj). The frontend (App.jsx) calls
+It serves a base .gguf model with a LoRA adapter and a multimodal projector
+(mmproj) that handles BOTH vision and audio for Gemma 4 / 4n. The frontend
+(App.jsx) calls
     POST {VITE_LLAMA_URL}                   ->  /v1/chat/completions
 exactly the same way it currently calls the local llama-server during dev.
+
+Why upstream binary instead of llama-cpp-python:
+  The Python wrapper's vision pipeline silently dropped image_url content
+  for our Gemma build — the model never saw the image. The upstream
+  `llama-server` binary handles --mmproj correctly for both vision and
+  audio inputs, matching the local Windows build that works.
 
 ==============================================================================
 One-time setup (run from the repo root, with Modal already authenticated):
@@ -15,9 +22,9 @@ One-time setup (run from the repo root, with Modal already authenticated):
     # Drop your three artifacts into ./backend/, then upload them to a Modal
     # Volume (so they don't bloat the image and survive redeploys):
     modal volume create isl-models
-    modal volume put isl-models backend/base.gguf   /base.gguf
-    modal volume put isl-models backend/lora.gguf   /lora.gguf
-    modal volume put isl-models backend/mmproj.gguf /mmproj.gguf
+    modal volume put isl-models backend/base_f16.gguf /base_f16.gguf
+    modal volume put isl-models backend/lora.gguf     /lora.gguf
+    modal volume put isl-models backend/mmproj.gguf   /mmproj.gguf
 
     # Deploy the server:
     modal deploy backend/app.py
@@ -30,40 +37,56 @@ Modal prints the public URL. Set it on Vercel as
 import modal
 
 # ---------------------------------------------------------------------------
-# Image: CUDA + llama-cpp-python built with cuBLAS so the T4 is actually used.
+# Image: clone llama.cpp from source and build the `llama-server` binary
+# with CUDA + multimodal (vision + audio via mmproj) support.
 # ---------------------------------------------------------------------------
+LLAMA_CPP_DIR = "/opt/llama.cpp"
+LLAMA_SERVER_BIN = f"{LLAMA_CPP_DIR}/build/bin/llama-server"
+
 image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.4.1-devel-ubuntu22.04", add_python="3.11"
     )
-    .apt_install("git", "build-essential", "cmake", "curl", "libcurl4-openssl-dev")
+    .apt_install(
+        "git",
+        "build-essential",
+        "cmake",
+        "curl",
+        "libcurl4-openssl-dev",
+        "ccache",
+    )
     .run_commands(
+        # CUDA stubs so the linker has libcuda.so at build time. The real
+        # driver is provided by Modal's host at runtime.
         "ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1",
         "echo '/usr/local/cuda/lib64/stubs' > /etc/ld.so.conf.d/cuda-stubs.conf",
-        "ldconfig"
+        "ldconfig",
     )
-    .env(
-        {
-            "CC": "gcc",
-            "CXX": "g++",
-
-            #"LDFLAGS": "-L/usr/local/cuda/lib64/stubs",
-            #"LIBRARY_PATH": "/usr/local/cuda/lib64/stubs",
-            #"LD_LIBRARY_PATH": "/usr/local/cuda/lib64/stubs",
-
-            # Build llama-cpp-python with CUDA support.
-            "CMAKE_ARGS": "-DGGML_CUDA=on -DLLAMA_CURL=on",
-            "FORCE_CMAKE": "1",
-        }
+    .run_commands(
+        # Clone upstream llama.cpp. The `master` branch carries the latest
+        # multimodal (mtmd) support including Gemma 3n audio. If you need a
+        # reproducible build, replace with `&& git checkout <sha>`.
+        f"git clone --depth 1 https://github.com/ggml-org/llama.cpp {LLAMA_CPP_DIR}",
+        # Configure with CUDA + curl + multimodal server.
+        # GGML_CUDA_F16 turns on fp16 compute (faster on T4/L4).
+        # The server target pulls in the multimodal (mtmd) code automatically.
+        f"cmake -S {LLAMA_CPP_DIR} -B {LLAMA_CPP_DIR}/build "
+        "  -DGGML_CUDA=ON "
+        "  -DGGML_CUDA_F16=ON "
+        "  -DLLAMA_CURL=ON "
+        "  -DCMAKE_BUILD_TYPE=Release "
+        "  -DLLAMA_BUILD_SERVER=ON "
+        "  -DCMAKE_EXE_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs' "
+        "  -DCMAKE_SHARED_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs'",
+        # Parallel build of just the server (and its deps).
+        f"cmake --build {LLAMA_CPP_DIR}/build --config Release -j --target llama-server",
+        # Sanity check — fail the image build early if the binary is missing.
+        f"test -x {LLAMA_SERVER_BIN}",
     )
     .pip_install(
-        # No version pin — gemma4 arch support was added after 0.3.16.
-        # Latest build will always have the newest architecture support.
-        "llama-cpp-python[server]",
         "fastapi",
         "uvicorn[standard]",
         "httpx",            # for the CORS reverse-proxy
-        "huggingface-hub",
         "pydantic",
     )
 )
@@ -71,7 +94,7 @@ image = (
 # ---------------------------------------------------------------------------
 # Volume holds the .gguf artifacts so the container image stays small and the
 # files persist across deploys.
-#   /models/base.gguf
+#   /models/base_f16.gguf
 #   /models/lora.gguf
 #   /models/mmproj.gguf
 # ---------------------------------------------------------------------------
@@ -89,6 +112,9 @@ app = modal.App("isl-llama-server")
 
 @app.function(
     image=image,
+    # f16 9 GB base + mmproj + KV cache spills on T4 (16 GB). L4 has 24 GB
+    # and is the same Modal price tier — switch back to "T4" only if you
+    # later swap to a Q8_0/Q5 quant of the base.
     gpu="T4",
     volumes={MODELS_DIR: models_vol},
     timeout=60 * 60,
@@ -107,13 +133,8 @@ def serve():
                                             ▼
                                          127.0.0.1:8001
                                             │
-                                         python -m llama_cpp.server
+                                         /opt/llama.cpp/build/bin/llama-server
                                          (subprocess started in lifespan)
-
-    We use @modal.asgi_app rather than @modal.web_server so Modal's runtime
-    serves the ASGI app directly. The previous @modal.web_server +
-    blocking uvicorn.run() approach silently failed to bind port 8000,
-    which is why the browser got responses with no CORS headers.
     """
     import os
     import subprocess
@@ -134,19 +155,30 @@ def serve():
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Start llama.cpp as a subprocess on the internal port.
-        # --chat_format is intentionally omitted: the GGUF has
-        # `tokenizer.chat_template` baked in, so llama.cpp uses it directly.
-        llama_proc = subprocess.Popen([
-            "python", "-m", "llama_cpp.server",
-            "--model",           BASE_GGUF,
-            "--lora_path",       LORA_GGUF,
-            "--clip_model_path", MMPROJ_GGUF,
-            "--n_gpu_layers",    "-1",       # full GPU offload on T4
-            "--n_ctx",           "4096",
-            "--host",            "127.0.0.1",
-            "--port",            str(LLAMA_INTERNAL_PORT),
-        ])
+        # Start the upstream llama-server binary. Flags mirror the local
+        # Windows invocation that works.
+        #
+        #   -m       base model
+        #   --lora   LoRA adapter (merged at runtime)
+        #   --mmproj multimodal projector (vision + audio for Gemma 4n)
+        #   -ngl     GPU layers (-1 = all)
+        #   -c       context window
+        #   -fa      flash-attention (faster + lower VRAM)
+        #   --jinja  use the chat template baked into the GGUF
+        cmd = [
+            LLAMA_SERVER_BIN,
+            "-m",        BASE_GGUF,
+            "--lora",    LORA_GGUF,
+            "--mmproj",  MMPROJ_GGUF,
+            "-ngl",      "999",
+            "-c",        "4096",
+            "-fa",       "on",
+            "--jinja",
+            "--host",    "127.0.0.1",
+            "--port",    str(LLAMA_INTERNAL_PORT),
+        ]
+        print("[llama-server] launching:", " ".join(cmd), flush=True)
+        llama_proc = subprocess.Popen(cmd)
 
         # One persistent async client — long timeout because inference is slow.
         app.state.client = httpx.AsyncClient(
@@ -154,11 +186,35 @@ def serve():
             timeout=httpx.Timeout(300.0),
         )
 
+        # Wait for the server to start accepting connections before letting
+        # any client requests hit the proxy. Otherwise the first few
+        # requests get ConnectError 500s while the model is still loading.
+        import asyncio
+        for _ in range(180):  # up to ~3 minutes for cold load
+            if llama_proc.poll() is not None:
+                raise RuntimeError(
+                    f"llama-server exited early with code {llama_proc.returncode}"
+                )
+            try:
+                r = await app.state.client.get("/health", timeout=2.0)
+                if r.status_code == 200:
+                    print("[llama-server] ready", flush=True)
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+        else:
+            raise RuntimeError("llama-server did not become ready in time")
+
         try:
             yield
         finally:
             await app.state.client.aclose()
             llama_proc.terminate()
+            try:
+                llama_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                llama_proc.kill()
 
     proxy = FastAPI(lifespan=lifespan)
 

@@ -50,21 +50,33 @@ const DICTIONARY = [
   "Wet", "What", "You", "Your", "Take","Tonight","Dinner","After","One","Tablet","Capital","Large", "City",
 ];
 
-const SYSTEM_PROMPT =
-  "You are an Indian Sign Language (ISL) gloss generator. " +
-  "Convert the user's input into an ISL gloss line. " +
+// Shared instruction block. We deliver this in the USER turn (not the system
+// turn) because the f16 base model follows in-turn instructions much more
+// reliably than system-role guidance — local testing showed system-role
+// rules being ignored on image inputs (e.g. "WHAT YOU" for an image of a
+// sign). Putting the rules adjacent to the actual input, and asking the
+// model to think first, fixes that.
+const GLOSS_INSTRUCTIONS =
+  "Task: convert the input below into an Indian Sign Language (ISL) gloss line.\n" +
   "ISL gloss is a sequence of UPPERCASE keyword tokens in topic-comment order, " +
   "with no articles, no auxiliary verbs, and no punctuation.\n\n" +
-  "STRICT OUTPUT RULES — these are not optional:\n" +
-  "1. You MUST always produce a non-empty visible answer. Returning empty content is a FAILURE.\n" +
-  "2. The visible answer MUST be exactly ONE LINE containing ONLY the gloss tokens — " +
-  "no quotes, no labels (no 'Answer:', 'Gloss:', etc.), no markdown, no bullets, no explanation.\n" +
-  "3. Every gloss token MUST be in UPPERCASE. Never use lowercase or mixed case.\n" +
-  "4. NEVER output the word HAVE in the gloss. Drop it. ISL gloss does not use 'have'.\n" +
-  "5. NEVER output articles (a, an, the) or auxiliary verbs (is, am, are, was, were, do, does, did, will, would, can, could, should, may, might).\n" +
-  "6. If you reason internally, keep the reasoning separate. The final visible response line is REQUIRED regardless of how much you reasoned.\n" +
-  "7. If you are unsure, make your best attempt rather than returning nothing.\n\n" +
-  "Example correct output:  TONIGHT DINNER AFTER TABLET ONE TAKE PLEASE";
+  "First, think step-by-step inside a <think>…</think> block:\n" +
+  "  • What is the MEANING of the input? (For an image: what does the scene/sign communicate? Not 'a photo of X'.)\n" +
+  "  • Which content words carry that meaning?\n" +
+  "  • Reorder them into ISL topic-comment order and uppercase them.\n" +
+  "Then, AFTER closing </think>, output exactly ONE LINE containing ONLY the gloss tokens.\n\n" +
+  "STRICT OUTPUT RULES:\n" +
+  "1. The final line MUST be non-empty. Empty output is a FAILURE.\n" +
+  "2. The final line MUST contain ONLY uppercase gloss tokens — no quotes, no labels " +
+  "(no 'Answer:', 'Gloss:'), no markdown, no bullets, no explanation.\n" +
+  "3. NEVER output the word HAVE. ISL gloss does not use 'have'.\n" +
+  "4. NEVER output articles (a, an, the) or auxiliary verbs (is, am, are, was, were, do, does, did, will, would, can, could, should, may, might).\n" +
+  "5. IMAGES: gloss the MEANING the image conveys, NOT the act of viewing it. " +
+  "NEVER output tokens like SEE, PHOTO, PICTURE, IMAGE, LOOK, SHOW, READ, TEXT, SIGN, WHAT, YOU — " +
+  "those describe the medium, not the message.\n" +
+  "   Example: a Radiation Hazard sign → RADIATION HAZARD   (NOT 'WHAT YOU' or 'SEE SIGN RADIATION').\n" +
+  "   Example: a photo of a wet floor warning → CAUTION WET FLOOR.\n\n" +
+  "Example (text input 'What is the largest city in India?'):  NAME YOU WHAT INDIA STATE LARGE CAPITAL";
 
 // ─── SVG icon helpers ─────────────────────────────────────────────────────────
 const Ico = ({ d, size = 14, fill = "none", sw = 2 }) => (
@@ -334,6 +346,7 @@ const GLOSS_SYNONYMS = {
   high: "large",
   highest: "large",
   most: "large",
+  yours: "your",
 };
 
 // Tokens to drop entirely from the gloss before matching — words ISL gloss
@@ -416,29 +429,49 @@ async function loadClipFrames(clipNames) {
 async function fetchGloss({ text, imageDataUrl, audioDataUrl }) {
   let userContent;
   if (audioDataUrl) {
-    // Strip data-URL prefix → raw base64 for input_audio (Gemma 4 E2B audio conformer)
     const base64 = audioDataUrl.split(",")[1];
     userContent = [
-      { type: "text", text: "Listen to this audio and convert the speech to ISL gloss." },
+      {
+        type: "text",
+        text:
+          GLOSS_INSTRUCTIONS +
+          "\n\nInput: the following audio clip. Transcribe it mentally inside <think>, then produce the gloss line." +
+          (text ? `\nUser hint: ${text}` : ""),
+      },
       { type: "input_audio", input_audio: { data: base64, format: "wav" } },
     ];
   } else if (imageDataUrl) {
+    // llama-cpp-python's vision pipeline requires image_url FIRST — it binds
+    // the image by position before reading the text prompt.
     userContent = [
-      { type: "text", text: text || "This is a photo of a public sign (e.g. hospital, transport, safety, informational). Read all text on the sign. Understand the core message or instruction it is communicating. Then output ONLY the ISL gloss tokens that convey that message — no description, no explanation, just the gloss line." },
       { type: "image_url", image_url: { url: imageDataUrl } },
+      {
+        type: "text",
+        text:
+          GLOSS_INSTRUCTIONS +
+          "\n\nInput: the image above. Inside <think>, describe what the image actually communicates " +
+          "(the message, not 'a photo of…'), then produce the gloss line." +
+          (text ? `\nUser hint: ${text}` : ""),
+      },
     ];
   } else {
-    userContent = text;
+    userContent = `${GLOSS_INSTRUCTIONS}\n\nInput: ${text}`;
   }
 
   const body = {
     model: "gemma",
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: userContent },
     ],
-    temperature: 0.1,
-    max_tokens: 2048,
+    // budget_tokens activates Gemma 4's built-in thinking mode.
+    // llama-cpp-python passes unknown fields through to the underlying
+    // Llama object, so extra keys here are safe even on older builds.
+    budget_tokens: 2048,
+    // Thinking models need temperature >= 0.5 — below that the model
+    // suppresses the reasoning chain and gives deterministic one-liners.
+    temperature: 0.6,
+    // Extra headroom for <think>…</think> tokens before the gloss line.
+    max_tokens: 4096,
     stream: false,
   };
 
