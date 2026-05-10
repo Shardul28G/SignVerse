@@ -141,9 +141,11 @@ def serve():
     from contextlib import asynccontextmanager
 
     import httpx
-    from fastapi import FastAPI, Request
+    from collections import defaultdict, deque
+    from typing import Any
+    from fastapi import FastAPI, Request, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import StreamingResponse, JSONResponse
     from starlette.background import BackgroundTask
 
     for p in (BASE_GGUF, LORA_GGUF, MMPROJ_GGUF):
@@ -226,6 +228,42 @@ def serve():
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ─── In-memory session history ──────────────────────────────────────────
+    # Lives only for the lifetime of this container (Modal scales to zero
+    # after `scaledown_window` seconds of inactivity, so this is intentionally
+    # ephemeral — it's "for that session" not durable storage). Capped per
+    # session to keep RAM usage bounded.
+    SESSION_HISTORY_LIMIT = 100
+    session_history: dict[str, deque] = defaultdict(
+        lambda: deque(maxlen=SESSION_HISTORY_LIMIT)
+    )
+
+    @proxy.post("/session/history")
+    async def session_history_post(request: Request) -> JSONResponse:
+        try:
+            body: dict[str, Any] = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid json body")
+        session_id = body.get("session_id")
+        entry = body.get("entry")
+        if not session_id or not isinstance(entry, dict):
+            raise HTTPException(status_code=400, detail="session_id and entry required")
+        # Upsert by entry id so resolved-gloss updates replace the original.
+        bucket = session_history[session_id]
+        eid = entry.get("id")
+        if eid:
+            for i, existing in enumerate(bucket):
+                if existing.get("id") == eid:
+                    bucket[i] = entry
+                    return JSONResponse({"ok": True, "count": len(bucket)})
+        bucket.append(entry)
+        return JSONResponse({"ok": True, "count": len(bucket)})
+
+    @proxy.get("/session/history")
+    async def session_history_get(session_id: str) -> JSONResponse:
+        bucket = session_history.get(session_id)
+        return JSONResponse({"entries": list(bucket) if bucket else []})
 
     @proxy.api_route(
         "/{path:path}",

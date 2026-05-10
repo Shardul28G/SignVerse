@@ -639,19 +639,89 @@ function AudioPlayer({ src }) {
   );
 }
 
+const SIGN_LANGUAGES = [
+  { code: "ISL", label: "ISL", full: "Indian Sign Language",    available: true  },
+  { code: "ASL", label: "ASL", full: "American Sign Language",  available: false },
+  { code: "BSL", label: "BSL", full: "British Sign Language",   available: false },
+  { code: "Auslan", label: "Auslan", full: "Australian Sign Language", available: false },
+];
+
 // ─── Topbar ───────────────────────────────────────────────────────────────────
 function Topbar({ status }) {
   const modelOnline = status !== "error";
+  const [langOpen, setLangOpen] = useState(false);
+  const [selectedLang, setSelectedLang] = useState("ISL");
+  const [tooltipCode, setTooltipCode] = useState(null);
+  const dropRef = useRef(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!langOpen) return;
+    const onDown = (e) => {
+      if (!dropRef.current?.contains(e.target)) setLangOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [langOpen]);
+
   return (
     <header className="topbar">
       <div className="brand">
         <div className="brand-mark">i</div>
         <div>
-          <div className="brand-name">ISL Helper</div>
-          <div className="brand-sub">Indian Sign Language assistant</div>
+          <div className="brand-name">SignVerse</div>
+          <div className="brand-sub">Sign Language assistant</div>
         </div>
       </div>
       <div className="topbar-actions">
+        {/* Language selector */}
+        <div className="lang-selector" ref={dropRef}>
+          <button
+            className="pill-btn lang-pill"
+            onClick={() => setLangOpen((o) => !o)}
+            aria-haspopup="listbox"
+            aria-expanded={langOpen}
+          >
+            <span className="lang-flag">🤟</span>
+            {selectedLang}
+            <ChevDownIcon />
+          </button>
+
+          {langOpen && (
+            <div className="lang-dropdown" role="listbox">
+              {SIGN_LANGUAGES.map((lang) => (
+                <div key={lang.code} className="lang-option-wrap">
+                  <button
+                    role="option"
+                    aria-selected={lang.code === selectedLang}
+                    className={`lang-option${lang.code === selectedLang ? " selected" : ""}${!lang.available ? " disabled" : ""}`}
+                    onClick={() => {
+                      if (!lang.available) return;
+                      setSelectedLang(lang.code);
+                      setLangOpen(false);
+                    }}
+                    onMouseEnter={() => !lang.available && setTooltipCode(lang.code)}
+                    onMouseLeave={() => setTooltipCode(null)}
+                  >
+                    <span className="lang-code">{lang.label}</span>
+                    <span className="lang-full">{lang.full}</span>
+                    {!lang.available && <span className="lang-soon">Soon</span>}
+                    {lang.code === selectedLang && (
+                      <svg className="lang-check" width="13" height="13" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
+                  </button>
+                  {tooltipCode === lang.code && (
+                    <div className="lang-tooltip">Coming soon</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <button className="pill-btn">
           <span
             className="dot"
@@ -669,25 +739,13 @@ function Topbar({ status }) {
   );
 }
 
-// ─── Input panel (left column) ────────────────────────────────────────────────
-function InputPanel({
-  onPlay, onRetry, onDictPreview,
+// ─── Gloss output card (shows model response) ────────────────────────────────
+function GlossCard({
   status, matched, skipped, activeWordIdx,
-  gloss, error, modelDebug, hasSubmitted,
+  gloss, error, modelDebug,
+  onRetry, onDictPreview,
 }) {
-  const [mode, setMode] = useState("text");
-  const [text, setText] = useState("");
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [recording, setRecording] = useState(false);
   const [dictOpen, setDictOpen] = useState(false);
-  const [audioUrl, setAudioUrl] = useState(null);       // object URL for <audio> preview
-  const [audioDataUrl, setAudioDataUrl] = useState(null); // base64 data URL for API
-  const audioNodesRef = useRef(null); // { ctx, source, processor, stream }
-  const samplesRef = useRef([]);
-
-  const busy = status === "loading";
-
   const glossCardState =
     status === "loading" ? "loading" : error ? "error" : "ready";
 
@@ -700,11 +758,274 @@ function InputPanel({
     return "Ready";
   })();
 
+  return (
+    <div className="gloss-card" data-state={glossCardState}>
+      <div className="gloss-head">
+        <span className="gloss-label">ISL Gloss · model output</span>
+        <span className="gloss-status">
+          <span className="pulse" />
+          {glossStatusText}
+        </span>
+      </div>
+
+      {/* Ready state */}
+      <div className="gloss-state state-ready">
+        <div className="gloss-display">
+          {matched.length > 0
+            ? matched.map((w) => w.toUpperCase()).join(" ")
+            : <span className="placeholder">Type below and press Sign it</span>
+          }
+        </div>
+        {matched.length > 0 && (
+          <>
+            <div className="gloss-chips">
+              {matched.map((w, i) => (
+                <span
+                  key={`${w}-${i}`}
+                  className={`chip${i === activeWordIdx ? " active" : ""}`}
+                >
+                  {w.toUpperCase()}
+                </span>
+              ))}
+              {skipped.map((w, i) => (
+                <span key={`s-${w}-${i}`} className="chip skipped">{w}</span>
+              ))}
+            </div>
+            <div className="gloss-meta">
+              <span><b>{matched.length}</b> matched</span>
+              <span><b>{skipped.length}</b> skipped</span>
+              <span>· model: <b>gemma-isl</b></span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Loading state */}
+      <div className="gloss-state state-loading">
+        <div className="loading-row">
+          <span className="loading-spinner" />
+          <div>
+            <div className="loading-title">Translating with Gemma…</div>
+            <div className="loading-sub">
+              Avatar is signing <b>PLEASE WAIT</b> while the model thinks.
+            </div>
+          </div>
+        </div>
+        <div className="skeleton-line w-80" />
+        <div className="skeleton-chips">
+          <span /><span /><span />
+        </div>
+      </div>
+
+      {/* Error state */}
+      <div className="gloss-state state-error">
+        {gloss && (
+          <div className="gloss-display" style={{ marginBottom: 2 }}>
+            {gloss.toUpperCase()}
+          </div>
+        )}
+        <div className="error-row">
+          <span className="error-icon">!</span>
+          <div>
+            <div className="error-title">
+              {error === "no_dict_match"
+                ? "No words matched the dictionary"
+                : "Model returned no usable gloss"}
+            </div>
+            <div className="error-sub">
+              {error === "no_dict_match"
+                ? "The model produced the gloss above but none of the words are in the dictionary. "
+                : error
+                ? error.replace(/\.$/, "") + ". "
+                : "None of the words matched the dictionary. "}
+              Avatar is signing <b>PROBLEM</b>. Try a phrase using the available words below.
+            </div>
+          </div>
+        </div>
+        <div className="error-actions">
+          <button className="error-btn primary" onClick={onRetry}>↻ Retry</button>
+          <button
+            className="error-btn"
+            onClick={() => {
+              setDictOpen(true);
+              setTimeout(() => {
+                document.getElementById("dictPanel")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+              }, 50);
+            }}
+          >
+            View dictionary
+          </button>
+        </div>
+      </div>
+
+      {/* Footer: dict toggle + raw HTTP */}
+      <div className="gloss-footer">
+        <button
+          className="link-btn"
+          onClick={() => setDictOpen((o) => !o)}
+          aria-expanded={dictOpen}
+          aria-controls="dictPanel"
+        >
+          <BookIcon />
+          Available words
+          <span className="pill-count">{DICTIONARY.length}</span>
+          <span className="chev" style={{ transform: dictOpen ? "rotate(180deg)" : "none" }}>
+            <ChevDownIcon />
+          </span>
+        </button>
+        {modelDebug && (
+          <details className="raw-resp">
+            <summary>Raw HTTP</summary>
+            <pre>{modelDebug}</pre>
+          </details>
+        )}
+      </div>
+
+      {/* Dictionary panel */}
+      {dictOpen && (
+        <div className="dict-panel" id="dictPanel">
+          <div className="dict-head">
+            <span className="dict-title">Words I can sign</span>
+            <span className="dict-hint">
+              Phrases must use these — model maps to closest match
+            </span>
+          </div>
+          <div className="dict-grid">
+            {DICTIONARY.map((word) => (
+              <button
+                key={word}
+                className="dict-word"
+                title={`Preview "${word}" sign`}
+                onClick={() => onDictPreview(word)}
+              >
+                <span className="play-ico">▶</span>
+                {word.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <div className="dict-foot">
+            <span className="dict-hint">
+              Try: "<b>You</b> have a <b>fever</b>" · "<b>What</b> is <b>your name</b>" · "<b>Caution</b> · <b>wet floor</b>"
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmtRelativeTime(ts, now) {
+  const diff = (now - ts) / 1000;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+// ─── History panel (recent local inputs) ─────────────────────────────────────
+function HistoryPanel({ history, onPick, onClear }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  const kindIcon = (entry) => {
+    if (entry.kind === "image") return <ImageIcon />;
+    if (entry.kind === "audio") return <MicIcon size={13} />;
+    return <TextIcon />;
+  };
+
+  return (
+    <div className="history-panel">
+      <div className="history-head">
+        <span className="history-label">History · this session</span>
+        {history.length > 0 && (
+          <button className="link-btn" onClick={onClear} title="Clear history">
+            <TrashIcon />
+            Clear
+          </button>
+        )}
+      </div>
+      {history.length === 0 ? (
+        <div className="history-empty">
+          No history yet. Your inputs will appear here.
+        </div>
+      ) : (
+        <ul className="history-list">
+          {history.map((entry) => (
+            <li key={entry.id}>
+              <button
+                className="history-item"
+                onClick={() => onPick(entry)}
+                title="Re-run this input"
+              >
+                <span className="history-icon">{kindIcon(entry)}</span>
+                <span className="history-body">
+                  <span className="history-text">
+                    {entry.text || (entry.kind === "image" ? "Image input" : entry.kind === "audio" ? "Voice input" : "—")}
+                  </span>
+                  {entry.gloss && (
+                    <span className="history-gloss">{entry.gloss.toUpperCase()}</span>
+                  )}
+                </span>
+                <span className="history-time">{fmtRelativeTime(entry.ts, now)}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ─── Unified input bar (replaces desktop input card + mobile bar) ────────────
+function InputBar({ onPlay, status, pendingText, onConsumePendingText }) {
+  const [text, setText] = useState("");
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [recording, setRecording] = useState(false);
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [audioDataUrl, setAudioDataUrl] = useState(null);
+  const audioNodesRef = useRef(null);
+  const samplesRef = useRef([]);
+  const fileInpRef = useRef(null);
+  const inputRef = useRef(null);
+
+  const busy = status === "loading";
+
+  // Allow parent (e.g. history click) to pre-fill the text box.
+  useEffect(() => {
+    if (pendingText != null) {
+      setText(pendingText);
+      onConsumePendingText?.();
+      inputRef.current?.focus();
+    }
+  }, [pendingText, onConsumePendingText]);
+
+  const handleImageFile = async (file) => {
+    if (!file) { setImageFile(null); setImagePreview(null); return; }
+    setImageFile(file);
+    const dataUrl = await fileToDataURL(file);
+    setImagePreview(dataUrl);
+  };
+
+  const clearAttachments = () => {
+    setImageFile(null);
+    setImagePreview(null);
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    setAudioUrl(null);
+    setAudioDataUrl(null);
+  };
+
   const submit = async () => {
+    if (busy) return;
     if (!text.trim() && !imageFile && !audioDataUrl) return;
     let imageDataUrl = null;
     if (imageFile) imageDataUrl = await fileToDataURL(imageFile);
     onPlay({ text: text.trim(), imageDataUrl, audioDataUrl });
+    setText("");
+    clearAttachments();
   };
 
   const startRecording = async () => {
@@ -712,7 +1033,6 @@ function InputPanel({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const ctx = new AudioContext();
       const source = ctx.createMediaStreamSource(stream);
-      // ScriptProcessorNode collects raw PCM float32 samples
       const processor = ctx.createScriptProcessor(4096, 1, 1);
       samplesRef.current = [];
       processor.onaudioprocess = (e) => {
@@ -722,7 +1042,6 @@ function InputPanel({
       processor.connect(ctx.destination);
       audioNodesRef.current = { ctx, source, processor, stream };
       setRecording(true);
-      // Clear any prior recording
       if (audioUrl) URL.revokeObjectURL(audioUrl);
       setAudioUrl(null);
       setAudioDataUrl(null);
@@ -743,7 +1062,6 @@ function InputPanel({
     audioNodesRef.current = null;
     setRecording(false);
 
-    // Merge all PCM chunks and encode as WAV
     const total = samplesRef.current.reduce((n, c) => n + c.length, 0);
     const merged = new Float32Array(total);
     let off = 0;
@@ -756,387 +1074,172 @@ function InputPanel({
     setAudioDataUrl(dataUrl);
   };
 
-  const handleImageFile = async (file) => {
-    if (!file) { setImageFile(null); setImagePreview(null); return; }
-    setImageFile(file);
-    const dataUrl = await fileToDataURL(file);
-    setImagePreview(dataUrl);
-  };
-
-  const clearInput = () => {
-    setText("");
-    setImageFile(null);
-    setImagePreview(null);
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
-    setAudioUrl(null);
-    setAudioDataUrl(null);
-  };
-
-  const handleKeyDown = (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
-  };
-
-  // Paste image from clipboard (Ctrl+V / Cmd+V) when in image mode
+  // Paste handler — always-on. Captures images from clipboard.
   useEffect(() => {
     const onPaste = (e) => {
-      if (mode !== "image") return;
-      const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
-      if (item) handleImageFile(item.getAsFile());
+      // Don't intercept paste into other inputs/textareas elsewhere.
+      const tag = e.target?.tagName;
+      const isOtherField =
+        (tag === "INPUT" && e.target !== inputRef.current) || tag === "TEXTAREA";
+      const items = [...(e.clipboardData?.items ?? [])];
+      const imgItem = items.find((i) => i.type.startsWith("image/"));
+      if (imgItem) {
+        e.preventDefault();
+        handleImageFile(imgItem.getAsFile());
+        return;
+      }
+      if (isOtherField) return;
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [mode]);
+  }, []);
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      submit();
+    }
+  };
+
+  const hasAttachment = imageFile || audioUrl;
 
   return (
-    <section className="col-input">
-      <h1 className="desktop-only">What should they <em>sign</em>?</h1>
-      <p className="lede desktop-only" style={{ marginTop: -4 }}>
-        Type, speak, or drop an image — we'll convert it into ISL gloss and play it on the avatar.
-      </p>
-
-      {/* Mode tabs */}
-      <div className="mode-tabs desktop-only" role="tablist">
-        {[
-          { id: "text",  label: "Text",  icon: <TextIcon /> },
-          { id: "voice", label: "Voice", icon: <MicIcon /> },
-          { id: "image", label: "Image", icon: <ImageIcon /> },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            className={`mode-tab${mode === tab.id ? " active" : ""}`}
-            onClick={() => setMode(tab.id)}
-            role="tab"
-            aria-selected={mode === tab.id}
-          >
-            {tab.icon}
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Input card */}
-      <div className="desktop-only">
-      <div className="input-card">
-        <div className="body">
-          {mode === "text" && (
-            <textarea
-              className="input-textarea"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="e.g. You have a fever. Please come to floor 2."
-              disabled={busy}
-              maxLength={500}
-            />
-          )}
-
-          {mode === "voice" && (
-            <div className="voice-rec">
+    <div className="input-bar" role="group" aria-label="Compose ISL input">
+      {hasAttachment && (
+        <div className="input-attachments">
+          {imageFile && (
+            <div className="attachment-chip">
+              {imagePreview && <img src={imagePreview} alt="" className="attachment-thumb" />}
+              <span className="attachment-name">{imageFile.name}</span>
               <button
-                className={`voice-btn${recording ? " rec" : ""}`}
-                onClick={recording ? stopRecording : startRecording}
-                disabled={busy}
-                aria-label={recording ? "Stop recording" : audioUrl ? "Re-record" : "Start recording"}
-              >
-                <MicIcon size={32} />
-              </button>
-              <div className="voice-hint">
-                {recording
-                  ? "Listening… tap again to stop"
-                  : audioUrl
-                  ? "Audio captured · tap Sign it below, or re-record"
-                  : "Tap to record · raw audio sent directly to Gemma 4"}
-              </div>
-              {recording && (
-                <div className="voice-wave">
-                  {[...Array(6)].map((_, i) => <span key={i} />)}
-                </div>
-              )}
-              {!recording && audioUrl && <AudioPlayer src={audioUrl} />}
+                type="button"
+                className="attachment-clear"
+                onClick={() => handleImageFile(null)}
+                aria-label="Remove image"
+              >×</button>
             </div>
           )}
-
-          {mode === "image" && !imageFile && (
-            <label className="image-drop" htmlFor="fileInp">
-              <div className="ico"><UploadIcon /></div>
-              <div className="t">Drop, paste, or click to upload</div>
-              <div className="s">JPG, PNG, WebP · or Ctrl+V to paste from clipboard</div>
-              <input
-                type="file"
-                id="fileInp"
-                accept="image/*"
-                className="sr-only"
-                onChange={(e) => handleImageFile(e.target.files?.[0] ?? null)}
-              />
-            </label>
-          )}
-
-          {mode === "image" && imageFile && (
-            <div className="image-preview">
-              {imagePreview
-                ? <img src={imagePreview} alt={imageFile.name} className="image-thumb" />
-                : <div className="image-thumb" />
-              }
-              <div className="meta">
-                <div className="n">{imageFile.name}</div>
-                <div className="s">{(imageFile.size / 1024).toFixed(1)} KB</div>
-              </div>
-              <button className="image-clear-btn" onClick={() => handleImageFile(null)}>
-                Clear
-              </button>
+          {audioUrl && (
+            <div className="attachment-chip audio">
+              <MicIcon size={13} />
+              <AudioPlayer src={audioUrl} />
+              <button
+                type="button"
+                className="attachment-clear"
+                onClick={() => {
+                  if (audioUrl) URL.revokeObjectURL(audioUrl);
+                  setAudioUrl(null);
+                  setAudioDataUrl(null);
+                }}
+                aria-label="Remove audio"
+              >×</button>
             </div>
           )}
         </div>
+      )}
 
-        <div className="footer">
-          <div style={{ display: "flex", gap: 2 }}>
-            <button className="icon-btn" onClick={clearInput} title="Clear" aria-label="Clear">
-              <TrashIcon />
-            </button>
-            <button
-              className="icon-btn"
-              title="Load example"
-              aria-label="Load example"
-              onClick={() => { setText("You have a fever"); setMode("text"); }}
-            >
-              <InfoIcon />
-            </button>
-          </div>
-          <div className="char-count">
-            <span>{mode === "text" ? text.length : 0}</span> / 500
-          </div>
-        </div>
-      </div>
-
-      {/* CTA */}
-      <button
-        className={`cta${busy ? " loading" : ""}`}
-        onClick={submit}
-        disabled={busy || (!text.trim() && !imageFile && !audioDataUrl)}
-      >
-        {busy ? (
-          <><span className="spin" />Translating with Gemma…</>
-        ) : (
-          <>
-            <PlayIcon size={16} />
-            Sign it
-            <span style={{ opacity: 0.5, fontWeight: 400, marginLeft: "auto", fontSize: 12 }}>⏎</span>
-          </>
-        )}
-      </button>
-      </div>
-
-      {/* Mobile Input Bar */}
-      <div className="mobile-input-bar mobile-only">
+      <div className="input-bar-row">
         <button
-          className="icon-btn plus-btn"
-          onClick={() => document.getElementById("mobileFileInp").click()}
-          aria-label="Upload image"
+          type="button"
+          className="ib-btn plus-btn"
+          onClick={() => fileInpRef.current?.click()}
+          aria-label="Attach image"
           disabled={busy}
+          title="Attach image (or paste with Ctrl+V)"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
         </button>
         <input
+          ref={fileInpRef}
           type="file"
-          id="mobileFileInp"
           accept="image/*"
           className="sr-only"
           onChange={(e) => handleImageFile(e.target.files?.[0] ?? null)}
         />
 
-        <div className="mobile-input-wrapper">
-          {(imageFile || audioUrl) && (
-             <div className="mobile-preview-badge">
-               {imageFile ? "Image attached" : "Audio attached"}
-               <button onClick={clearInput} className="clear-badge" aria-label="Clear">×</button>
-             </div>
+        <input
+          ref={inputRef}
+          className="ib-input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={
+            recording
+              ? "Listening… tap mic again to stop"
+              : "Type a message, paste an image, or tap mic"
+          }
+          disabled={busy || recording}
+          maxLength={500}
+        />
+
+        <div className="mic-wrap">
+          <button
+            type="button"
+            className={`ib-btn mic-btn${recording ? " rec" : ""}`}
+            onClick={recording ? stopRecording : startRecording}
+            disabled={busy}
+            aria-label={recording ? "Click again to stop recording" : "Record audio"}
+            title={recording ? "Click again to stop recording" : "Click to record audio"}
+          >
+            <MicIcon size={18} />
+          </button>
+          {recording && (
+            <span className="mic-hint">Tap to stop</span>
           )}
-          <input
-            className="mobile-input"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={recording ? "Listening..." : "Type, speak, or image..."}
-            disabled={busy || recording}
-          />
-        </div>
-
-        <button
-          className={`icon-btn mic-btn ${recording ? "rec" : ""}`}
-          onClick={recording ? stopRecording : startRecording}
-          disabled={busy}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <path d="M12 19v3" />
-          </svg>
-        </button>
-
-        <button
-          className="mobile-cta"
-          onClick={submit}
-          disabled={busy || (!text.trim() && !imageFile && !audioDataUrl)}
-        >
-          Sign it
-        </button>
-      </div>
-
-      {/* Gloss output card */}
-      <div className="gloss-card" data-state={glossCardState}>
-        <div className="gloss-head">
-          <span className="gloss-label">ISL Gloss · model output</span>
-          <span className="gloss-status">
-            <span className="pulse" />
-            {glossStatusText}
+          <span className="mic-tooltip">
+            {recording ? "Click again to stop recording" : "Click to record audio"}
           </span>
         </div>
 
-        {/* Ready state */}
-        <div className="gloss-state state-ready">
-          <div className="gloss-display">
-            {matched.length > 0
-              ? matched.map((w) => w.toUpperCase()).join(" ")
-              : <span className="placeholder">Enter text and press Sign it</span>
-            }
-          </div>
-          {matched.length > 0 && (
-            <>
-              <div className="gloss-chips">
-                {matched.map((w, i) => (
-                  <span
-                    key={`${w}-${i}`}
-                    className={`chip${i === activeWordIdx ? " active" : ""}`}
-                  >
-                    {w.toUpperCase()}
-                  </span>
-                ))}
-                {skipped.map((w, i) => (
-                  <span key={`s-${w}-${i}`} className="chip skipped">{w}</span>
-                ))}
-              </div>
-              <div className="gloss-meta">
-                <span><b>{matched.length}</b> matched</span>
-                <span><b>{skipped.length}</b> skipped</span>
-                <span>· model: <b>gemma-isl</b></span>
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Loading state */}
-        <div className="gloss-state state-loading">
-          <div className="loading-row">
-            <span className="loading-spinner" />
-            <div>
-              <div className="loading-title">Translating with Gemma…</div>
-              <div className="loading-sub">
-                Avatar is signing <b>PLEASE WAIT</b> while the model thinks.
-              </div>
-            </div>
-          </div>
-          <div className="skeleton-line w-80" />
-          <div className="skeleton-chips">
-            <span /><span /><span />
-          </div>
-        </div>
-
-        {/* Error state */}
-        <div className="gloss-state state-error">
-          {gloss && (
-            <div className="gloss-display" style={{ marginBottom: 2 }}>
-              {gloss.toUpperCase()}
-            </div>
-          )}
-          <div className="error-row">
-            <span className="error-icon">!</span>
-            <div>
-              <div className="error-title">
-                {error === "no_dict_match"
-                  ? "No words matched the dictionary"
-                  : "Model returned no usable gloss"}
-              </div>
-              <div className="error-sub">
-                {error === "no_dict_match"
-                  ? "The model produced the gloss above but none of the words are in the dictionary. "
-                  : error
-                  ? error.replace(/\.$/, "") + ". "
-                  : "None of the words matched the dictionary. "}
-                Avatar is signing <b>PROBLEM</b>. Try a phrase using the available words below.
-              </div>
-            </div>
-          </div>
-          <div className="error-actions">
-            <button className="error-btn primary" onClick={onRetry}>↻ Retry</button>
-            <button
-              className="error-btn"
-              onClick={() => {
-                setDictOpen(true);
-                setTimeout(() => {
-                  document.getElementById("dictPanel")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                }, 50);
-              }}
-            >
-              View dictionary
-            </button>
-          </div>
-        </div>
-
-        {/* Footer: dict toggle + raw HTTP */}
-        <div className="gloss-footer">
-          <button
-            className="link-btn"
-            onClick={() => setDictOpen((o) => !o)}
-            aria-expanded={dictOpen}
-            aria-controls="dictPanel"
-          >
-            <BookIcon />
-            Available words
-            <span className="pill-count">{DICTIONARY.length}</span>
-            <span className="chev" style={{ transform: dictOpen ? "rotate(180deg)" : "none" }}>
-              <ChevDownIcon />
-            </span>
-          </button>
-          {modelDebug && (
-            <details className="raw-resp">
-              <summary>Raw HTTP</summary>
-              <pre>{modelDebug}</pre>
-            </details>
-          )}
-        </div>
-
-        {/* Dictionary panel */}
-        {dictOpen && (
-          <div className="dict-panel" id="dictPanel">
-            <div className="dict-head">
-              <span className="dict-title">Words I can sign</span>
-              <span className="dict-hint">
-                Phrases must use these — model maps to closest match
-              </span>
-            </div>
-            <div className="dict-grid">
-              {DICTIONARY.map((word) => (
-                <button
-                  key={word}
-                  className="dict-word"
-                  title={`Preview "${word}" sign`}
-                  onClick={() => onDictPreview(word)}
-                >
-                  <span className="play-ico">▶</span>
-                  {word.toUpperCase()}
-                </button>
-              ))}
-            </div>
-            <div className="dict-foot">
-              <span className="dict-hint">
-                Try: "<b>You</b> have a <b>fever</b>" · "<b>What</b> is <b>your name</b>" · "<b>Caution</b> · <b>wet floor</b>"
-              </span>
-            </div>
-          </div>
-        )}
+        <button
+          type="button"
+          className="ib-send"
+          onClick={submit}
+          disabled={busy || (!text.trim() && !imageFile && !audioDataUrl)}
+        >
+          {busy ? <span className="spin" /> : <PlayIcon size={14} />}
+          <span className="ib-send-label">Sign it</span>
+        </button>
       </div>
-    </section>
+    </div>
   );
+}
+
+// ─── Local + backend session history ─────────────────────────────────────────
+const HISTORY_KEY = "isl-history";
+const SESSION_ID_KEY = "isl-session-id";
+const HISTORY_LIMIT = 30;
+
+function getOrCreateSessionId() {
+  let id = localStorage.getItem(SESSION_ID_KEY);
+  if (!id) {
+    id =
+      (crypto?.randomUUID?.() ??
+        `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+    localStorage.setItem(SESSION_ID_KEY, id);
+  }
+  return id;
+}
+
+// Best-effort backend session save (fire-and-forget). The same Modal proxy
+// that fronts llama.cpp now also accepts /session/history. If the endpoint
+// is missing or the call fails, we silently fall back to localStorage only.
+function saveHistoryToBackend(sessionId, entry) {
+  try {
+    // The proxy lives at the same origin as LLAMA_URL, but with /session/history.
+    // We derive it from LLAMA_URL by stripping /v1/chat/completions.
+    const base = LLAMA_URL.replace(/\/v1\/chat\/completions\/?$/, "");
+    fetch(`${base}/session/history`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, entry }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* ignore */
+  }
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────
@@ -1153,10 +1256,21 @@ export default function App() {
   const [error, setError]             = useState(null);
   const [isPlaying, setIsPlaying]     = useState(true);
   const [speed, setSpeed]             = useState(1.0);
+  const [history, setHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]"); }
+    catch { return []; }
+  });
+  const [pendingText, setPendingText] = useState(null);
 
+  const sessionIdRef    = useRef(getOrCreateSessionId());
   const controlRef      = useRef(null);
   const progressFillRef = useRef(null);
   const lastSubmitRef   = useRef({ text: "", imageDataUrl: null });
+
+  useEffect(() => {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, HISTORY_LIMIT))); }
+    catch { /* quota exceeded — drop silently */ }
+  }, [history]);
 
   // Default animation on mount
   useEffect(() => {
@@ -1182,6 +1296,12 @@ export default function App() {
 
   const handlePlay = useCallback(async ({ text, imageDataUrl, audioDataUrl }) => {
     lastSubmitRef.current = { text, imageDataUrl, audioDataUrl };
+    const entryId = `h-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const kind = imageDataUrl ? "image" : audioDataUrl ? "audio" : "text";
+    const baseEntry = { id: entryId, ts: Date.now(), text, kind, gloss: "" };
+    setHistory((h) => [baseEntry, ...h].slice(0, HISTORY_LIMIT));
+    saveHistoryToBackend(sessionIdRef.current, baseEntry);
+
     setStatus("loading");
     setError(null);
     setGloss("");
@@ -1246,6 +1366,15 @@ export default function App() {
       setFrames(newFrames);
       setWordRanges(newRanges);
       setStatus("ready");
+
+      // Record the resolved gloss back onto the history entry.
+      setHistory((h) =>
+        h.map((e) => (e.id === entryId ? { ...e, gloss: glossText } : e))
+      );
+      saveHistoryToBackend(sessionIdRef.current, {
+        ...baseEntry,
+        gloss: glossText,
+      });
     } catch (e) {
       const errorMsg = e.message;
       let errF = null, errWr = null;
@@ -1318,21 +1447,29 @@ export default function App() {
         <Topbar status={status} />
 
         <main className="main">
-          <InputPanel
-            onPlay={handlePlay}
-            onRetry={handleRetry}
-            onDictPreview={handleDictPreview}
-            status={status}
-            matched={matched}
-            skipped={skipped}
-            activeWordIdx={activeWordIdx}
-            gloss={gloss}
-            error={error}
-            modelDebug={modelDebug}
-            hasSubmitted={hasSubmitted}
-          />
+          {/* ── Left: Gloss output (top) + History (bottom) ── */}
+          <section className="col-left">
+            <GlossCard
+              status={status}
+              matched={matched}
+              skipped={skipped}
+              activeWordIdx={activeWordIdx}
+              gloss={gloss}
+              error={error}
+              modelDebug={modelDebug}
+              onRetry={handleRetry}
+              onDictPreview={handleDictPreview}
+            />
+            <HistoryPanel
+              history={history}
+              onPick={(entry) => {
+                if (entry.text) setPendingText(entry.text);
+              }}
+              onClear={() => setHistory([])}
+            />
+          </section>
 
-          {/* ── Right: Stage ── */}
+          {/* ── Right: Stage + Input bar below ── */}
           <section className="col-stage">
             <div className="stage">
               {/* Stage head */}
@@ -1347,6 +1484,10 @@ export default function App() {
                 <div className="stage-tools">
                   <button className="stage-tool" title="Captions"><CaptionsIcon /></button>
                   <button className="stage-tool" title="Fullscreen"><FullscreenIcon /></button>
+                </div>
+                <div className="mobile-brand-badge mobile-only">
+                  <div className="mobile-brand-mark">i</div>
+                  <span className="mobile-brand-name">SignVerse</span>
                 </div>
               </div>
 
@@ -1449,6 +1590,14 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* Input bar (below avatar) */}
+            <InputBar
+              onPlay={handlePlay}
+              status={status}
+              pendingText={pendingText}
+              onConsumePendingText={() => setPendingText(null)}
+            />
 
             {/* Stage footer */}
             <div className="stage-footer">
