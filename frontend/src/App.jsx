@@ -646,15 +646,13 @@ const SIGN_LANGUAGES = [
   { code: "Auslan", label: "Auslan", full: "Australian Sign Language", available: false },
 ];
 
-// ─── Topbar ───────────────────────────────────────────────────────────────────
-function Topbar({ status }) {
-  const modelOnline = status !== "error";
+// ─── Shared language selector (used in both topbar and mobile stage-head) ────
+function LangSelector({ compact = false }) {
   const [langOpen, setLangOpen] = useState(false);
   const [selectedLang, setSelectedLang] = useState("ISL");
   const [tooltipCode, setTooltipCode] = useState(null);
   const dropRef = useRef(null);
 
-  // Close on outside click
   useEffect(() => {
     if (!langOpen) return;
     const onDown = (e) => {
@@ -663,6 +661,60 @@ function Topbar({ status }) {
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [langOpen]);
+
+  return (
+    <div className="lang-selector" ref={dropRef}>
+      <button
+        className={`pill-btn lang-pill${compact ? " lang-pill-compact" : ""}`}
+        onClick={() => setLangOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={langOpen}
+      >
+        <span className="lang-flag">🤟</span>
+        {selectedLang}
+        <ChevDownIcon />
+      </button>
+
+      {langOpen && (
+        <div className="lang-dropdown" role="listbox">
+          {SIGN_LANGUAGES.map((lang) => (
+            <div key={lang.code} className="lang-option-wrap">
+              <button
+                role="option"
+                aria-selected={lang.code === selectedLang}
+                className={`lang-option${lang.code === selectedLang ? " selected" : ""}${!lang.available ? " disabled" : ""}`}
+                onClick={() => {
+                  if (!lang.available) return;
+                  setSelectedLang(lang.code);
+                  setLangOpen(false);
+                }}
+                onMouseEnter={() => !lang.available && setTooltipCode(lang.code)}
+                onMouseLeave={() => setTooltipCode(null)}
+              >
+                <span className="lang-code">{lang.label}</span>
+                <span className="lang-full">{lang.full}</span>
+                {!lang.available && <span className="lang-soon">Soon</span>}
+                {lang.code === selectedLang && (
+                  <svg className="lang-check" width="13" height="13" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </button>
+              {tooltipCode === lang.code && (
+                <div className="lang-tooltip">Coming soon</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Topbar ───────────────────────────────────────────────────────────────────
+function Topbar({ status }) {
+  const modelOnline = status !== "error";
 
   return (
     <header className="topbar">
@@ -674,53 +726,7 @@ function Topbar({ status }) {
         </div>
       </div>
       <div className="topbar-actions">
-        {/* Language selector */}
-        <div className="lang-selector" ref={dropRef}>
-          <button
-            className="pill-btn lang-pill"
-            onClick={() => setLangOpen((o) => !o)}
-            aria-haspopup="listbox"
-            aria-expanded={langOpen}
-          >
-            <span className="lang-flag">🤟</span>
-            {selectedLang}
-            <ChevDownIcon />
-          </button>
-
-          {langOpen && (
-            <div className="lang-dropdown" role="listbox">
-              {SIGN_LANGUAGES.map((lang) => (
-                <div key={lang.code} className="lang-option-wrap">
-                  <button
-                    role="option"
-                    aria-selected={lang.code === selectedLang}
-                    className={`lang-option${lang.code === selectedLang ? " selected" : ""}${!lang.available ? " disabled" : ""}`}
-                    onClick={() => {
-                      if (!lang.available) return;
-                      setSelectedLang(lang.code);
-                      setLangOpen(false);
-                    }}
-                    onMouseEnter={() => !lang.available && setTooltipCode(lang.code)}
-                    onMouseLeave={() => setTooltipCode(null)}
-                  >
-                    <span className="lang-code">{lang.label}</span>
-                    <span className="lang-full">{lang.full}</span>
-                    {!lang.available && <span className="lang-soon">Soon</span>}
-                    {lang.code === selectedLang && (
-                      <svg className="lang-check" width="13" height="13" viewBox="0 0 24 24" fill="none"
-                        stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    )}
-                  </button>
-                  {tooltipCode === lang.code && (
-                    <div className="lang-tooltip">Coming soon</div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <LangSelector />
 
         <button className="pill-btn">
           <span
@@ -1474,6 +1480,16 @@ export default function App() {
             <div className="stage">
               {/* Stage head */}
               <div className="stage-head">
+                {/* Mobile-only top row: SignVerse left, ISL right */}
+                <div className="mobile-stage-toprow mobile-only">
+                  <div className="mobile-brand-badge">
+                    <div className="mobile-brand-mark">i</div>
+                    <span className="mobile-brand-name">SignVerse</span>
+                  </div>
+                  <LangSelector compact />
+                </div>
+
+                {/* Now Signing pill — left on desktop, second row on mobile */}
                 <div className="now-signing">
                   <span className="live-dot">●</span>
                   <div>
@@ -1481,13 +1497,11 @@ export default function App() {
                     <div className="word">{nowSigningWord}</div>
                   </div>
                 </div>
+
+                {/* Desktop-only tools */}
                 <div className="stage-tools">
                   <button className="stage-tool" title="Captions"><CaptionsIcon /></button>
                   <button className="stage-tool" title="Fullscreen"><FullscreenIcon /></button>
-                </div>
-                <div className="mobile-brand-badge mobile-only">
-                  <div className="mobile-brand-mark">i</div>
-                  <span className="mobile-brand-name">SignVerse</span>
                 </div>
               </div>
 
