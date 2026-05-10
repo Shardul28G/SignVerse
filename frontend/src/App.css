@@ -1142,7 +1142,7 @@ details.raw-resp pre {
   /* Stage on top */
   .col-stage {
     order: 1;
-    height: 55vh;
+    height: 59vh;
     flex: none;
     overflow: visible;
   }
@@ -1153,18 +1153,41 @@ details.raw-resp pre {
     background: #e8dece;
   }
   .stage-head {
+    top: 14px;
+    left: 14px;
+    right: 14px;
     display: flex;
-    top: 16px;
-    left: 16px;
-    right: 16px;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
   }
   .stage-tools { display: none; }
 
+  /* Top row: SignVerse left, ISL right */
+  .mobile-stage-toprow {
+    display: flex !important;
+    width: 100%;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* Compact lang pill for mobile */
+  .lang-pill-compact {
+    height: 30px;
+    padding: 0 10px;
+    font-size: 12px;
+    min-width: unset;
+  }
+
+  /* Dropdown anchors to right edge of the ISL pill */
+  .mobile-stage-toprow .lang-dropdown {
+    right: 0;
+    left: auto;
+  }
+
   /* Mobile brand — top-right of stage */
   .mobile-brand-badge {
-    display: flex !important;
+    display: flex;
     align-items: center;
     gap: 10px;
     background: rgba(255,255,255,.85);
@@ -1253,7 +1276,7 @@ details.raw-resp pre {
     gap: 0;
     padding: 0;
     /* fill: 100dvh minus stage height minus fixed input bar */
-    height: calc(45dvh - 58px);
+    height: calc(41dvh - 58px);
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-width: thin;
