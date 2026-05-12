@@ -56,40 +56,34 @@ const DICTIONARY = [
   "Language", "Large", "Learn", "Like", "Maharashtra", "Make", "Man", "More",
   "Morning", "Mother", "Mumbai", "Name", "New", "Night", "No", "One", "Play",
   "Please", "Population", "Problem", "Read", "Ready", "Remember", "Right",
-  "Run", "Sad", "School", "See", "She", "Sick", "Sign", "Sister", "Slow",
+  "Run", "Sad", "School", "See", "She", "Sick", "Sign", "Sister","Slip", "Slow",
   "Small", "Sorry", "State", "Stop", "Tablet", "Take", "Teach", "Teacher",
   "There", "They", "Thirsty", "Time", "Today", "Tomorrow", "Tonight", "Very",
   "Walk", "Water", "We", "Wet", "What", "Where", "Why", "Year", "Yes",
   "Yesterday", "You", "Your",
 ];
 
-// Shared instruction block. We deliver this in the USER turn (not the system
-// turn) because the f16 base model follows in-turn instructions much more
-// reliably than system-role guidance — local testing showed system-role
-// rules being ignored on image inputs (e.g. "WHAT YOU" for an image of a
-// sign). Putting the rules adjacent to the actual input, and asking the
-// model to think first, fixes that.
-const GLOSS_INSTRUCTIONS =
-  "Task: convert the input below into an Indian Sign Language (ISL) gloss line.\n" +
-  "ISL gloss is a sequence of UPPERCASE keyword tokens in topic-comment order, " +
-  "with no articles, no auxiliary verbs, and no punctuation.\n\n" +
-  "First, think step-by-step inside a <think>…</think> block:\n" +
-  "  • What is the MEANING of the input? (For an image: what does the scene/sign communicate? Not 'a photo of X'.)\n" +
-  "  • Which content words carry that meaning?\n" +
-  "  • Reorder them into ISL topic-comment order and uppercase them.\n" +
-  "Then, AFTER closing </think>, output exactly ONE LINE containing ONLY the gloss tokens.\n\n" +
-  "STRICT OUTPUT RULES:\n" +
-  "1. The final line MUST be non-empty. Empty output is a FAILURE.\n" +
-  "2. The final line MUST contain ONLY uppercase gloss tokens — no quotes, no labels " +
-  "(no 'Answer:', 'Gloss:'), no markdown, no bullets, no explanation.\n" +
-  "3. NEVER output the word HAVE. ISL gloss does not use 'have'.\n" +
-  "4. NEVER output articles (a, an, the) or auxiliary verbs (is, am, are, was, were, do, does, did, will, would, can, could, should, may, might).\n" +
-  "5. IMAGES: gloss the MEANING the image conveys, NOT the act of viewing it. " +
-  "NEVER output tokens like SEE, PHOTO, PICTURE, IMAGE, LOOK, SHOW, READ, TEXT, SIGN, WHAT, YOU — " +
-  "those describe the medium, not the message.\n" +
-  "   Example: a Radiation Hazard sign → RADIATION HAZARD   (NOT 'WHAT YOU' or 'SEE SIGN RADIATION').\n" +
-  "   Example: a photo of a wet floor warning → CAUTION WET FLOOR.\n\n" +
-  "Example (text input 'What is the largest city in India?'):  NAME YOU WHAT INDIA STATE LARGE CAPITAL";
+// System prompt — delivered in the system role so it is always in context and
+// never leaks into the assistant content turn.
+// <think> blocks are intentionally omitted: the model was emitting them inside
+// message.content, polluting the gloss output. The post-processing fallback
+// in extractGlossFromReasoning still handles any reasoning that leaks through.
+const SYSTEM_PROMPT =
+  "You are an Indian Sign Language (ISL) gloss converter.\n" +
+  "Convert every user input into a single line of ISL gloss tokens.\n\n" +
+  "ISL gloss rules:\n" +
+  "• UPPERCASE tokens only, in topic-comment order.\n" +
+  "• No articles (a, an, the), no auxiliary verbs (is, am, are, was, were, do, does, did, will, would, can, could, should, may, might), no punctuation.\n" +
+  "• NEVER output HAVE — ISL does not use it.\n" +
+  "• Output ONLY the gloss tokens — no labels, no markdown, no explanation.\n" +
+  "• The output MUST be non-empty.\n\n" +
+  "For IMAGE inputs: gloss the MEANING the image communicates, not the act of viewing it.\n" +
+  "  NEVER output: SEE, PHOTO, PICTURE, IMAGE, LOOK, SHOW, READ, TEXT, SIGN.\n" +
+  "  Example: radiation hazard sign → RADIATION HAZARD\n" +
+  "  Example: wet floor warning photo → CAUTION WET FLOOR\n\n" +
+  "For AUDIO inputs: transcribe the speech mentally, then gloss its meaning.\n\n" +
+  "Example — text 'What is the largest city in India?':\n" +
+  "NAME YOU WHAT INDIA STATE LARGE CAPITAL";
 
 // ─── SVG icon helpers ─────────────────────────────────────────────────────────
 const Ico = ({ d, size = 14, fill = "none", sw = 2 }) => (
@@ -356,15 +350,36 @@ function lerpFrame(frameA, frameB, t) {
 
 // Words the model may use that have no ISL clip — mapped to a signed synonym.
 const GLOSS_SYNONYMS = {
-  high: "large",
+  // size
+  high:    "large",
   highest: "large",
-  most: "large",
+  most:    "large",
+  max:     "large",
+  bigger:  "big",
+  biggest: "big",
+  slippery: "slip",
+  // possession
   yours: "your",
 };
 
-// Tokens to drop entirely from the gloss before matching — words ISL gloss
-// never uses (e.g. "have"). Even if the model emits them, we strip them.
-const GLOSS_DROP = new Set(["have", "be"]);
+// Tokens to drop entirely from the gloss before matching — articles, auxiliary
+// verbs and other function words ISL gloss never uses. Even if the model emits
+// them, we strip them before dictionary lookup.
+const GLOSS_DROP = new Set([
+  // to-be
+  "be", "is", "am", "are", "was", "were", "been", "being",
+  // to-have (auxiliary only)
+  "have", "has", "had", "having",
+  // to-do (auxiliary only)
+  "do", "does", "did",
+  // modals
+  "will", "would", "shall", "should",
+  "can", "could", "may", "might", "must",
+  // articles
+  "a", "an", "the",
+  // common copula / filler
+  "it", "its", "that", "this", "there", "their",
+]);
 
 // ─── Gloss → matched / skipped clip names ────────────────────────────────────
 function glossToClipNames(gloss) {
@@ -447,9 +462,8 @@ async function fetchGloss({ text, imageDataUrl, audioDataUrl }) {
       {
         type: "text",
         text:
-          GLOSS_INSTRUCTIONS +
-          "\n\nInput: the following audio clip. Transcribe it mentally inside <think>, then produce the gloss line." +
-          (text ? `\nUser hint: ${text}` : ""),
+          "Convert the following audio clip to ISL gloss." +
+          (text ? ` User hint: ${text}` : ""),
       },
       { type: "input_audio", input_audio: { data: base64, format: "wav" } },
     ];
@@ -461,29 +475,21 @@ async function fetchGloss({ text, imageDataUrl, audioDataUrl }) {
       {
         type: "text",
         text:
-          GLOSS_INSTRUCTIONS +
-          "\n\nInput: the image above. Inside <think>, describe what the image actually communicates " +
-          "(the message, not 'a photo of…'), then produce the gloss line." +
-          (text ? `\nUser hint: ${text}` : ""),
+          "Convert the meaning of this image to ISL gloss." +
+          (text ? ` User hint: ${text}` : ""),
       },
     ];
   } else {
-    userContent = `${GLOSS_INSTRUCTIONS}\n\nInput: ${text}`;
+    userContent = `Convert to ISL gloss: ${text}`;
   }
 
   const body = {
     model: "gemma",
     messages: [
-      { role: "user", content: userContent },
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user",   content: userContent  },
     ],
-    // budget_tokens activates Gemma 4's built-in thinking mode.
-    // llama-cpp-python passes unknown fields through to the underlying
-    // Llama object, so extra keys here are safe even on older builds.
-    budget_tokens: 2048,
-    // Thinking models need temperature >= 0.5 — below that the model
-    // suppresses the reasoning chain and gives deterministic one-liners.
-    temperature: 0.6,
-    // Extra headroom for <think>…</think> tokens before the gloss line.
+    temperature: 0.3,
     max_tokens: 4096,
     stream: false,
   };
@@ -1373,13 +1379,15 @@ export default function App() {
       setWordRanges(newRanges);
       setStatus("ready");
 
-      // Record the resolved gloss back onto the history entry.
+      // Store the cleaned, GLOSS_DROP-filtered matched words — not the raw
+      // LLM output — so history never shows dropped tokens like "this", "is".
+      const cleanedGloss = m.map((w) => w.toUpperCase()).join(" ");
       setHistory((h) =>
-        h.map((e) => (e.id === entryId ? { ...e, gloss: glossText } : e))
+        h.map((e) => (e.id === entryId ? { ...e, gloss: cleanedGloss } : e))
       );
       saveHistoryToBackend(sessionIdRef.current, {
         ...baseEntry,
-        gloss: glossText,
+        gloss: cleanedGloss,
       });
     } catch (e) {
       const errorMsg = e.message;
