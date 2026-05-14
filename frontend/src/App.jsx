@@ -36,9 +36,9 @@ const LLAMA_URL =
 const LANDMARKS_BASE_URL =
   import.meta.env.VITE_LANDMARKS_BASE_URL || "/landmarks";
 
-// These four ship with the frontend bundle (frontend/public/landmarks/) so the
-// initial UI states (greetings, loading/error fallbacks) never depend on R2.
-const BUNDLED_LANDMARKS = new Set(["Hello", "Wait", "Problem", "Please"]);
+// These ship with the frontend bundle (frontend/public/landmarks/) so they
+// never depend on R2.
+const BUNDLED_LANDMARKS = new Set(["Hello", "Wait", "Problem", "Please", "Thank_You"]);
 
 function landmarkUrl(name) {
   if (BUNDLED_LANDMARKS.has(name)) return `/landmarks/${name}.json`;
@@ -49,6 +49,7 @@ function landmarkUrl(name) {
 // landmark JSON either bundled (frontend/public/landmarks/) or on R2.
 const DICTIONARY = [
   "After", "Age", "All", "Bad", "Beautiful", "Below", "Big", "Book", "Boy",
+  "Thank_You",
   "Capital", "Caution", "Child", "City", "Cold", "Come", "Country", "Deaf",
   "Dinner", "Doctor", "Drink", "Eat", "Evening", "Family", "Far", "Fast",
   "Father", "Fever", "Floor", "Food", "Girl", "Give", "Go", "Good", "Happy",
@@ -62,6 +63,21 @@ const DICTIONARY = [
   "Walk", "Water", "We", "Wet", "What", "Where", "Why", "Year", "Yes",
   "Yesterday", "You", "Your",
 ];
+
+// ─── Direct-play shortcuts ────────────────────────────────────────────────────
+// These phrases skip the LLM entirely and play their clips immediately.
+// Text matching is case-insensitive; extra whitespace is normalised.
+const DIRECT_SHORTCUTS = [
+  { pattern: /^thank\s+you$/i,   clips: ["Thank_You"],        gloss: "THANK YOU"    },
+  { pattern: /^please\s+wait$/i, clips: ["Please", "Wait"],   gloss: "PLEASE WAIT"  },
+  { pattern: /^hello$/i,         clips: ["Hello"],             gloss: "HELLO"        },
+  { pattern: /^problem$/i,       clips: ["Problem"],           gloss: "PROBLEM"      },
+];
+
+function findShortcut(text) {
+  const t = text.trim().replace(/\s+/g, " ");
+  return DIRECT_SHORTCUTS.find((s) => s.pattern.test(t)) ?? null;
+}
 
 // System prompt — delivered in the system role so it is always in context and
 // never leaks into the assistant content turn.
@@ -202,7 +218,7 @@ function useVRM(url) {
         setVrm(model);
       },
       undefined,
-      (err) => console.error("VRM load error:", err),
+      () => {},
     );
   }, [url]);
   return vrm;
@@ -494,14 +510,12 @@ async function fetchGloss({ text, imageDataUrl, audioDataUrl }) {
     stream: false,
   };
 
-  console.log("[Gemma] → request body:", JSON.stringify(body, null, 2));
   const resp = await fetch(LLAMA_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   const respText = await resp.text();
-  console.log("[Gemma] ← HTTP", resp.status, "raw response:\n", respText);
   let data = null;
   try { data = JSON.parse(respText); } catch { /* leave as raw text */ }
   if (!resp.ok) {
@@ -526,19 +540,12 @@ async function fetchGloss({ text, imageDataUrl, audioDataUrl }) {
     if (reasoningText) {
       const recovered = extractGlossFromReasoning(reasoningText);
       if (recovered) {
-        console.log("[Gemma] recovered gloss from reasoning:", recovered);
         cleaned = recovered;
       }
     }
   }
 
-  console.log(
-    "[Gemma] content:", raw,
-    "→ reasoning_content len:", reasoningField.length,
-    "→ after-think:", afterThinking,
-    "→ cleaned:", cleaned,
-  );
-  return { raw: afterThinking || cleaned, cleaned, debug: respText, httpError: null };
+  return { raw: afterThinking || cleaned, cleaned, httpError: null };
 }
 
 // Extract an ISL gloss from a reasoning block. The gloss is generally the
@@ -754,7 +761,7 @@ function Topbar({ status }) {
 // ─── Gloss output card (shows model response) ────────────────────────────────
 function GlossCard({
   status, matched, skipped, activeWordIdx,
-  gloss, error, modelDebug,
+  gloss, error,
   onRetry, onDictPreview,
 }) {
   const [dictOpen, setDictOpen] = useState(false);
@@ -870,7 +877,7 @@ function GlossCard({
         </div>
       </div>
 
-      {/* Footer: dict toggle + raw HTTP */}
+      {/* Footer: dict toggle */}
       <div className="gloss-footer">
         <button
           className="link-btn"
@@ -885,12 +892,6 @@ function GlossCard({
             <ChevDownIcon />
           </span>
         </button>
-        {modelDebug && (
-          <details className="raw-resp">
-            <summary>Raw HTTP</summary>
-            <pre>{modelDebug}</pre>
-          </details>
-        )}
       </div>
 
       {/* Dictionary panel */}
@@ -1263,7 +1264,6 @@ export default function App() {
   const [activeWordIdx, setActiveWordIdx] = useState(-1);
   const [status, setStatus]           = useState("idle");
   const [gloss, setGloss]             = useState("");
-  const [modelDebug, setModelDebug]   = useState("");
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [error, setError]             = useState(null);
   const [isPlaying, setIsPlaying]     = useState(true);
@@ -1292,7 +1292,7 @@ export default function App() {
         setWordRanges(wr);
         setMatched(["Hello"]);
       })
-      .catch((e) => console.warn("Default clip load failed:", e.message));
+      .catch(() => {});
   }, []);
 
   // Keyboard shortcuts
@@ -1317,12 +1317,34 @@ export default function App() {
     setStatus("loading");
     setError(null);
     setGloss("");
-    setModelDebug("");
     setMatched([]);
     setSkipped([]);
     setActiveWordIdx(-1);
     setHasSubmitted(true);
     setIsPlaying(true);
+
+    // ── Shortcut: known phrases play directly without hitting the LLM ──────
+    const shortcut = !imageDataUrl && !audioDataUrl ? findShortcut(text) : null;
+    if (shortcut) {
+      try {
+        const { frames: f, wordRanges: wr } = await loadClipFrames(shortcut.clips);
+        setFrames(f);
+        setWordRanges(wr);
+        setGloss(shortcut.gloss);
+        setMatched(shortcut.clips);
+        setSkipped([]);
+        setActiveWordIdx(-1);
+        setStatus("ready");
+        const cleanedGloss = shortcut.clips.map((w) => w.replace("_", " ").toUpperCase()).join(" ");
+        setHistory((h) =>
+          h.map((e) => (e.id === entryId ? { ...e, gloss: cleanedGloss } : e))
+        );
+        saveHistoryToBackend(sessionIdRef.current, { ...baseEntry, gloss: cleanedGloss });
+      } catch {
+        setStatus("idle");
+      }
+      return;
+    }
 
     // ── Start the LLM call IMMEDIATELY (parallel with clip loading) ────────
     const llmPromise = fetchGloss({ text, imageDataUrl, audioDataUrl });
@@ -1336,8 +1358,8 @@ export default function App() {
       setWordRanges(waitWr);
       setMatched(["Please", "Wait"]);
       waitStartTime = Date.now();
-    } catch (e) {
-      console.warn("Please/Wait clip load failed:", e.message);
+    } catch {
+      /* clip load failed — continue without wait animation */
     }
 
     // Please(97) + transition(15) + Wait(97) frames at 25fps ≈ 8.4s.
@@ -1351,14 +1373,9 @@ export default function App() {
       }
     };
 
-    let debugText = "";
     try {
-      const { cleaned, debug, httpError } = await llmPromise;
+      const { cleaned, httpError } = await llmPromise;
       const glossText = cleaned;
-      debugText = debug || "";
-      // Surface the raw HTTP response immediately so it's available for
-      // debugging even if we throw below (httpError, no-match, clip load).
-      setModelDebug(debugText);
       if (httpError) throw new Error(`llama.cpp ${httpError}`);
       // Always store the raw gloss so it's visible in the error state too.
       setGloss(glossText);
@@ -1396,14 +1413,13 @@ export default function App() {
         const r = await loadClipFrames(["Problem"]);
         errF = r.frames;
         errWr = r.wordRanges;
-      } catch (e2) {
-        console.warn("Problem clip load failed:", e2.message);
+      } catch {
+        /* Problem clip unavailable */
       }
 
       await ensureMinPlay();
 
       setError(errorMsg);
-      if (debugText) setModelDebug(debugText);
       setStatus("idle");
       if (errF) {
         setFrames(errF);
@@ -1429,8 +1445,8 @@ export default function App() {
       setSkipped([]);
       setActiveWordIdx(-1);
       setIsPlaying(true);
-    } catch (e) {
-      console.warn("Dict preview failed:", e.message);
+    } catch {
+      /* word clip unavailable */
     }
   }, []);
 
@@ -1470,7 +1486,6 @@ export default function App() {
               activeWordIdx={activeWordIdx}
               gloss={gloss}
               error={error}
-              modelDebug={modelDebug}
               onRetry={handleRetry}
               onDictPreview={handleDictPreview}
             />
