@@ -638,18 +638,6 @@ h1, h2 { margin: 0; }
   border: 1px solid var(--rule);
 }
 
-details.raw-resp { font-size: 12px; color: var(--ink-soft); }
-details.raw-resp summary { cursor: pointer; user-select: none; padding: 4px 0; }
-details.raw-resp summary:hover { color: var(--ink-2); }
-details.raw-resp pre {
-  margin: 6px 0 0; padding: 10px 12px;
-  background: var(--paper-2); border: 1px solid var(--rule);
-  border-radius: 8px; font-family: var(--font-mono); font-size: 11px;
-  line-height: 1.45; color: var(--ink-2);
-  max-height: 160px; overflow: auto;
-  white-space: pre-wrap; word-break: break-word;
-}
-
 /* ─── Dictionary panel ───────────────────────────────────────────────────── */
 .dict-panel {
   margin-top: 4px;
@@ -1321,25 +1309,4 @@ details.raw-resp pre {
     flex: 1;
   }
 
-  details.raw-resp {
-    width: 100%;
-    background: var(--paper-2);
-    border: 1px solid var(--rule);
-    border-radius: 8px;
-    padding: 8px 10px;
-    margin-top: 4px;
-  }
-  details.raw-resp summary {
-    font-weight: 600;
-    color: var(--ink-2);
-    padding: 2px 0;
-  }
-  details.raw-resp[open] summary { margin-bottom: 6px; }
-  details.raw-resp pre {
-    max-height: none;
-    overflow: visible;
-    font-size: 10.5px;
-    padding: 8px 10px;
-    -webkit-overflow-scrolling: touch;
-  }
 }
