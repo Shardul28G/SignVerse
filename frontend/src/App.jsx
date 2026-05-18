@@ -1287,6 +1287,29 @@ function InputBar({ onPlay, status, pendingText, onConsumePendingText }) {
   );
 }
 
+// ─── GPU warm-up toast ───────────────────────────────────────────────────────
+// Shown only on the very first submission to explain the cold-start delay.
+function GpuWarmupToast({ visible, onDismiss }) {
+  useEffect(() => {
+    if (!visible) return;
+    const t = setTimeout(onDismiss, 10000);
+    return () => clearTimeout(t);
+  }, [visible, onDismiss]);
+
+  return (
+    <div className={`gpu-toast${visible ? " gpu-toast--in" : ""}`} role="status" aria-live="polite">
+      <span className="gpu-toast-icon">⚡</span>
+      <div className="gpu-toast-body">
+        <div className="gpu-toast-title">GPU is warming up</div>
+        <div className="gpu-toast-sub">
+          The first request can take <b>1–2 minutes</b> while the model loads onto the GPU. Subsequent requests are much faster.
+        </div>
+      </div>
+      <button className="gpu-toast-close" onClick={onDismiss} aria-label="Dismiss">×</button>
+    </div>
+  );
+}
+
 // ─── Local + backend session history ─────────────────────────────────────────
 const HISTORY_KEY = "isl-history";
 const SESSION_ID_KEY = "isl-session-id";
@@ -1332,6 +1355,8 @@ export default function App() {
   const [status, setStatus]           = useState("idle");
   const [gloss, setGloss]             = useState("");
   const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [showWarmupToast, setShowWarmupToast] = useState(false);
+  const firstSubmitRef = useRef(false);
   const [error, setError]             = useState(null);
   const [isPlaying, setIsPlaying]     = useState(true);
   const [speed, setSpeed]             = useState(1.0);
@@ -1387,6 +1412,10 @@ export default function App() {
     setMatched([]);
     setSkipped([]);
     setActiveWordIdx(-1);
+    if (!firstSubmitRef.current) {
+      firstSubmitRef.current = true;
+      setShowWarmupToast(true);
+    }
     setHasSubmitted(true);
     setIsPlaying(true);
 
@@ -1718,6 +1747,11 @@ export default function App() {
           </section>
         </main>
       </div>
+
+      <GpuWarmupToast
+        visible={showWarmupToast}
+        onDismiss={() => setShowWarmupToast(false)}
+      />
     </>
   );
 }

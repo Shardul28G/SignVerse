@@ -727,6 +727,69 @@ h1, h2 { margin: 0; }
   margin-right: -2px;
 }
 
+/* ─── GPU warm-up toast ──────────────────────────────────────────────────── */
+.gpu-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 340px;
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.22), 0 0 0 1px rgba(217,106,74,0.12);
+  opacity: 0;
+  transform: translateY(16px) scale(0.97);
+  pointer-events: none;
+  transition: opacity 280ms ease, transform 280ms ease;
+}
+.gpu-toast--in {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+.gpu-toast-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.gpu-toast-body {
+  flex: 1;
+  min-width: 0;
+}
+.gpu-toast-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 4px;
+  letter-spacing: 0.01em;
+}
+.gpu-toast-sub {
+  font-size: 12px;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+.gpu-toast-sub b { color: var(--ink-2); }
+.gpu-toast-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  flex-shrink: 0;
+  margin-top: -2px;
+  transition: color 120ms ease;
+}
+.gpu-toast-close:hover { color: var(--ink); }
+
 /* ─── History panel ──────────────────────────────────────────────────────── */
 .history-panel {
   background: var(--card);
