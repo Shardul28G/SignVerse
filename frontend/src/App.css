@@ -686,6 +686,47 @@ h1, h2 { margin: 0; }
 .dict-word:hover .play-ico { background: var(--accent); color: #fff; }
 .dict-foot { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rule); }
 
+/* ─── Suggestions panel ──────────────────────────────────────────────────── */
+.suggestions-panel {
+  margin-top: 4px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  padding: 12px;
+}
+.suggestions-list {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.suggestion-chip {
+  appearance: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--rule);
+  background: var(--card);
+  padding: 7px 11px;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease,
+              color 120ms ease, transform 120ms ease;
+  line-height: 1.2;
+}
+.suggestion-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  transform: translateY(-1px);
+}
+.suggestion-quote {
+  font-family: var(--font-serif, "Instrument Serif"), serif;
+  font-size: 16px;
+  line-height: 0;
+  color: var(--accent);
+  margin-right: -2px;
+}
+
 /* ─── History panel ──────────────────────────────────────────────────────── */
 .history-panel {
   background: var(--card);
