@@ -54,14 +54,29 @@ const DICTIONARY = [
   "Dinner", "Doctor", "Drink", "Eat", "Evening", "Family", "Far", "Fast",
   "Father", "Fever", "Floor", "Food", "Girl", "Give", "Go", "Good", "Happy",
   "He", "Hello", "Help", "Here", "Hospital", "Hot", "Hungry", "India", "Know",
-  "Language", "Large", "Learn", "Like", "Maharashtra", "Make", "Man", "More",
-  "Morning", "Mother", "Mumbai", "Name", "New", "Night", "No", "One", "Play",
+  "Language", "Large", "Learn", "Like", "Maharashtra", "Make", "Man","Me", "More",
+  "Morning", "Mother", "Mumbai","My", "Name", "New", "Night", "No", "One", "Play",
   "Please", "Population", "Problem", "Read", "Ready", "Remember", "Right",
   "Run", "Sad", "School", "See", "She", "Sick", "Sign", "Sister","Slip", "Slow",
   "Small", "Sorry", "State", "Stop", "Tablet", "Take", "Teach", "Teacher",
   "There", "They", "Thirsty", "Time", "Today", "Tomorrow", "Tonight", "Very",
   "Walk", "Water", "We", "Wet", "What", "Where", "Why", "Year", "Yes",
   "Yesterday", "You", "Your",
+];
+
+// ─── Sentence suggestions ────────────────────────────────────────────────────
+// Hand-curated phrases whose words all live in DICTIONARY (or get matched after
+// GLOSS_DROP / GLOSS_SYNONYMS). Clicking one populates the input bar so the
+// user can edit it before signing.
+const SENTENCE_SUGGESTIONS = [
+  "What is your name",
+  "Go to the hospital",
+  "I am hungry, give me food",
+  "She is a good teacher",
+  "Come here tomorrow morning",
+  "My father is a doctor",
+  "Take the tablet tonight",
+  "Mumbai is the capital of Maharashtra",
 ];
 
 // ─── Direct-play shortcuts ────────────────────────────────────────────────────
@@ -163,6 +178,11 @@ const NextIcon = () => (
 const ReplayIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" />
+  </svg>
+);
+const SparkIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
   </svg>
 );
 const BookIcon = () => (
@@ -374,13 +394,16 @@ const GLOSS_SYNONYMS = {
   bigger:  "big",
   biggest: "big",
   slippery: "slip",
+  I: "me",
+  i: "me",
   // possession
   yours: "your",
 };
 
-// Tokens to drop entirely from the gloss before matching — articles, auxiliary
-// verbs and other function words ISL gloss never uses. Even if the model emits
-// them, we strip them before dictionary lookup.
+// Post-processing filter — not a substitute for a good model prompt.
+// The system prompt already instructs the model to omit these tokens; this set
+// is a safety net that silently strips any that leak through before dictionary
+// lookup. It does NOT influence what the model outputs — only what gets matched.
 const GLOSS_DROP = new Set([
   // to-be
   "be", "is", "am", "are", "was", "were", "been", "being",
@@ -762,9 +785,10 @@ function Topbar({ status }) {
 function GlossCard({
   status, matched, skipped, activeWordIdx,
   gloss, error,
-  onRetry, onDictPreview,
+  onRetry, onDictPreview, onSuggestionPick,
 }) {
   const [dictOpen, setDictOpen] = useState(false);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const glossCardState =
     status === "loading" ? "loading" : error ? "error" : "ready";
 
@@ -877,7 +901,7 @@ function GlossCard({
         </div>
       </div>
 
-      {/* Footer: dict toggle */}
+      {/* Footer: dict toggle + suggestions */}
       <div className="gloss-footer">
         <button
           className="link-btn"
@@ -892,7 +916,51 @@ function GlossCard({
             <ChevDownIcon />
           </span>
         </button>
+        <button
+          className="link-btn"
+          onClick={() => setSuggestionsOpen((o) => !o)}
+          aria-expanded={suggestionsOpen}
+          aria-controls="suggestionsPanel"
+        >
+          <SparkIcon />
+          Try a sentence
+          <span className="pill-count">{SENTENCE_SUGGESTIONS.length}</span>
+          <span className="chev" style={{ transform: suggestionsOpen ? "rotate(180deg)" : "none" }}>
+            <ChevDownIcon />
+          </span>
+        </button>
       </div>
+
+      {/* Suggestions panel */}
+      {suggestionsOpen && (
+        <div className="suggestions-panel" id="suggestionsPanel">
+          <div className="dict-head">
+            <span className="dict-title">Sample sentences</span>
+            <span className="dict-hint">
+              Tap one to load it into the input bar, then press Sign it
+            </span>
+          </div>
+          <div className="suggestions-list">
+            {SENTENCE_SUGGESTIONS.map((s) => (
+              <button
+                key={s}
+                className="suggestion-chip"
+                title={`Use: "${s}"`}
+                onClick={() => onSuggestionPick(s)}
+              >
+                <span className="suggestion-quote">“</span>
+                {s}
+              </button>
+            ))}
+          </div>
+          <div className="dict-foot">
+            <span className="dict-hint">
+              💡 Also try these sentences in other languages — like <b>Hindi</b>,{" "}
+              <b>French</b>, or <b>Spanish</b> — the model understands them too.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Dictionary panel */}
       {dictOpen && (
@@ -1220,6 +1288,29 @@ function InputBar({ onPlay, status, pendingText, onConsumePendingText }) {
   );
 }
 
+// ─── GPU warm-up toast ───────────────────────────────────────────────────────
+// Shown only on the very first submission to explain the cold-start delay.
+function GpuWarmupToast({ visible, onDismiss }) {
+  useEffect(() => {
+    if (!visible) return;
+    const t = setTimeout(onDismiss, 10000);
+    return () => clearTimeout(t);
+  }, [visible, onDismiss]);
+
+  return (
+    <div className={`gpu-toast${visible ? " gpu-toast--in" : ""}`} role="status" aria-live="polite">
+      <span className="gpu-toast-icon">⚡</span>
+      <div className="gpu-toast-body">
+        <div className="gpu-toast-title">GPU is warming up</div>
+        <div className="gpu-toast-sub">
+          The first request can take <b>1–2 minutes</b> while the model loads onto the GPU. Subsequent requests are much faster.
+        </div>
+      </div>
+      <button className="gpu-toast-close" onClick={onDismiss} aria-label="Dismiss">×</button>
+    </div>
+  );
+}
+
 // ─── Local + backend session history ─────────────────────────────────────────
 const HISTORY_KEY = "isl-history";
 const SESSION_ID_KEY = "isl-session-id";
@@ -1265,6 +1356,8 @@ export default function App() {
   const [status, setStatus]           = useState("idle");
   const [gloss, setGloss]             = useState("");
   const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [showWarmupToast, setShowWarmupToast] = useState(false);
+  const firstSubmitRef = useRef(false);
   const [error, setError]             = useState(null);
   const [isPlaying, setIsPlaying]     = useState(true);
   const [speed, setSpeed]             = useState(1.0);
@@ -1320,6 +1413,10 @@ export default function App() {
     setMatched([]);
     setSkipped([]);
     setActiveWordIdx(-1);
+    if (!firstSubmitRef.current) {
+      firstSubmitRef.current = true;
+      setShowWarmupToast(true);
+    }
     setHasSubmitted(true);
     setIsPlaying(true);
 
@@ -1488,6 +1585,7 @@ export default function App() {
               error={error}
               onRetry={handleRetry}
               onDictPreview={handleDictPreview}
+              onSuggestionPick={(s) => setPendingText(s)}
             />
             <HistoryPanel
               history={history}
@@ -1650,6 +1748,11 @@ export default function App() {
           </section>
         </main>
       </div>
+
+      <GpuWarmupToast
+        visible={showWarmupToast}
+        onDismiss={() => setShowWarmupToast(false)}
+      />
     </>
   );
 }
