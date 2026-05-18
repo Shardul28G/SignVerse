@@ -400,9 +400,10 @@ const GLOSS_SYNONYMS = {
   yours: "your",
 };
 
-// Tokens to drop entirely from the gloss before matching — articles, auxiliary
-// verbs and other function words ISL gloss never uses. Even if the model emits
-// them, we strip them before dictionary lookup.
+// Post-processing filter — not a substitute for a good model prompt.
+// The system prompt already instructs the model to omit these tokens; this set
+// is a safety net that silently strips any that leak through before dictionary
+// lookup. It does NOT influence what the model outputs — only what gets matched.
 const GLOSS_DROP = new Set([
   // to-be
   "be", "is", "am", "are", "was", "were", "been", "being",
